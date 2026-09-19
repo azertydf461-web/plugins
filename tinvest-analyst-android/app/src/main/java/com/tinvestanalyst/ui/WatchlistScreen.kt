@@ -50,6 +50,7 @@ fun colorFor(verdict: Verdict): Color = when (verdict) {
 fun WatchlistScreen(
     viewModel: AnalystViewModel,
     onOpenSettings: () -> Unit,
+    onOpenCatalog: () -> Unit,
     onOpenInstrument: (String) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -103,6 +104,7 @@ fun WatchlistScreen(
                     ) {
                         Text(if (state.isRefreshing) "Считаю..." else "Пересчитать анализ")
                     }
+                    OutlinedButton(onClick = onOpenCatalog) { Text("Активы") }
                     OutlinedButton(onClick = onOpenSettings) { Text("Настройки") }
                 }
             }
@@ -127,12 +129,16 @@ fun WatchlistScreen(
 
             if (state.rows.isEmpty()) {
                 item {
-                    Text(
-                        "Список наблюдения пуст. Добавьте бумаги в настройках — найти можно по тикеру, " +
-                            "например SBER или GAZP.",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(vertical = 12.dp),
-                    )
+                    Column(Modifier.padding(vertical = 12.dp)) {
+                        Text(
+                            "Список наблюдения пуст. Откройте каталог — приложение само подтянет " +
+                                "с сервера брокера все активы, доступные к торгам, и вы выберете нужные.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Button(onClick = onOpenCatalog, modifier = Modifier.padding(top = 8.dp)) {
+                            Text("Выбрать активы")
+                        }
+                    }
                 }
             }
 

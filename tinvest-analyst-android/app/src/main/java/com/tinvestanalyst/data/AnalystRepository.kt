@@ -6,6 +6,7 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 private const val BASE_URL = "https://invest-public-api.tbank.ru/rest/"
@@ -31,6 +32,31 @@ class AnalystRepository(private val settings: AnalystSettingsStore) {
         val token = settings.apiToken?.takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("Не задан токен. Откройте настройки и вставьте токен T-Инвестиций.")
         return "Bearer $token"
+    }
+
+    // Каталог меняется редко, а весит много (тысячи бумаг), поэтому держим
+    // его в памяти до перезапуска приложения вместо повторных загрузок.
+    private val catalogCache = ConcurrentHashMap<InstrumentCategory, List<Instrument>>()
+
+    /**
+     * Список инструментов выбранного типа, отфильтрованный до тех, которыми
+     * реально можно торговать через API: остальное показывать бессмысленно —
+     * по ним не будет ни заявок, ни части рыночных данных.
+     */
+    suspend fun loadCatalog(
+        category: InstrumentCategory,
+        forceRefresh: Boolean = false,
+    ): List<Instrument> {
+        if (!forceRefresh) catalogCache[category]?.let { return it }
+        val instruments = api.getInstruments(
+            "tinkoff.public.invest.api.contract.v1.InstrumentsService/${category.endpointPath}",
+            auth(),
+            InstrumentsRequest(),
+        ).instruments
+            .filter { it.apiTradeAvailableFlag && it.buyAvailableFlag && it.figi.isNotBlank() }
+            .sortedBy { it.ticker }
+        catalogCache[category] = instruments
+        return instruments
     }
 
     suspend fun searchInstruments(query: String): List<Instrument> =

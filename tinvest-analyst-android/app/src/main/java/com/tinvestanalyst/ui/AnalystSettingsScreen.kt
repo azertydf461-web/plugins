@@ -41,7 +41,11 @@ private val INTERVALS = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun AnalystSettingsScreen(viewModel: AnalystViewModel, onBack: () -> Unit) {
+fun AnalystSettingsScreen(
+    viewModel: AnalystViewModel,
+    onOpenCatalog: () -> Unit,
+    onBack: () -> Unit,
+) {
     val state by viewModel.uiState.collectAsState()
     val search by viewModel.search.collectAsState()
     var tokenDraft by remember { mutableStateOf("") }
@@ -113,6 +117,13 @@ fun AnalystSettingsScreen(viewModel: AnalystViewModel, onBack: () -> Unit) {
                         "Добавить бумагу",
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(top = 12.dp),
+                    )
+                    Button(onClick = onOpenCatalog, modifier = Modifier.padding(bottom = 8.dp)) {
+                        Text("Каталог доступных активов")
+                    }
+                    Text(
+                        "Или найдите конкретную бумагу поиском:",
+                        style = MaterialTheme.typography.bodySmall,
                     )
                     OutlinedTextField(
                         value = search.query,

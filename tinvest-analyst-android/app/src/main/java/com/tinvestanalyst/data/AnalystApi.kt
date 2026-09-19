@@ -3,6 +3,7 @@ package com.tinvestanalyst.data
 import retrofit2.http.Body
 import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.Url
 
 /**
  * Только методы чтения рыночных данных. Методы выставления заявок сюда не
@@ -16,6 +17,17 @@ interface AnalystApi {
         @Header("Authorization") auth: String,
         @Body request: FindInstrumentRequest,
     ): FindInstrumentResponse
+
+    /**
+     * Каталог инструментов одного типа. Путь подставляется из
+     * [InstrumentCategory], чтобы пять почти одинаковых методов не плодить.
+     */
+    @POST
+    suspend fun getInstruments(
+        @Url url: String,
+        @Header("Authorization") auth: String,
+        @Body request: InstrumentsRequest,
+    ): InstrumentsResponse
 
     @POST("tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles")
     suspend fun getCandles(

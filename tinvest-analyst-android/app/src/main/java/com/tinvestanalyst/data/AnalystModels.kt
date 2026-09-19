@@ -40,8 +40,36 @@ data class Instrument(
     val instrumentType: String = "",
     val name: String = "",
     val uid: String = "",
+    val currency: String = "",
+    val exchange: String = "",
+    val lot: Int = 1,
     val apiTradeAvailableFlag: Boolean = false,
+    val buyAvailableFlag: Boolean = false,
+    val sellAvailableFlag: Boolean = false,
+    val forQualInvestorFlag: Boolean = false,
 )
+
+/** Каталог инструментов брокера: один тип активов на запрос. */
+enum class InstrumentCategory(val title: String, val endpointPath: String) {
+    SHARES("Акции", "Shares"),
+    BONDS("Облигации", "Bonds"),
+    ETFS("Фонды", "Etfs"),
+    CURRENCIES("Валюты", "Currencies"),
+    FUTURES("Фьючерсы", "Futures"),
+}
+
+@Serializable
+data class InstrumentsRequest(
+    /**
+     * INSTRUMENT_STATUS_BASE — только инструменты, доступные для торговли
+     * через API. Именно этот фильтр отсекает всё, что брокер показывает, но
+     * торговать не даёт.
+     */
+    val instrumentStatus: String = "INSTRUMENT_STATUS_BASE",
+)
+
+@Serializable
+data class InstrumentsResponse(val instruments: List<Instrument> = emptyList())
 
 @Serializable
 data class FindInstrumentRequest(

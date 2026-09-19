@@ -14,10 +14,11 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tinvestanalyst.ui.AnalystSettingsScreen
 import com.tinvestanalyst.ui.AnalystViewModel
+import com.tinvestanalyst.ui.InstrumentCatalogScreen
 import com.tinvestanalyst.ui.InstrumentDetailScreen
 import com.tinvestanalyst.ui.WatchlistScreen
 
-private enum class Screen { WATCHLIST, DETAIL, SETTINGS }
+private enum class Screen { WATCHLIST, DETAIL, SETTINGS, CATALOG }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,7 +37,11 @@ private fun AnalystApp() {
     var screen by remember { mutableStateOf(Screen.WATCHLIST) }
 
     BackHandler(enabled = screen != Screen.WATCHLIST) {
-        if (screen == Screen.DETAIL) viewModel.closeInstrument()
+        when (screen) {
+            Screen.DETAIL -> viewModel.closeInstrument()
+            Screen.CATALOG -> viewModel.analyzeMissing()
+            else -> Unit
+        }
         screen = Screen.WATCHLIST
     }
 
@@ -44,9 +49,18 @@ private fun AnalystApp() {
         Screen.WATCHLIST -> WatchlistScreen(
             viewModel = viewModel,
             onOpenSettings = { screen = Screen.SETTINGS },
+            onOpenCatalog = { screen = Screen.CATALOG },
             onOpenInstrument = { figi ->
                 viewModel.openInstrument(figi)
                 screen = Screen.DETAIL
+            },
+        )
+
+        Screen.CATALOG -> InstrumentCatalogScreen(
+            viewModel = viewModel,
+            onBack = {
+                viewModel.analyzeMissing()
+                screen = Screen.WATCHLIST
             },
         )
 
@@ -60,8 +74,10 @@ private fun AnalystApp() {
 
         Screen.SETTINGS -> AnalystSettingsScreen(
             viewModel = viewModel,
+            onOpenCatalog = { screen = Screen.CATALOG },
             onBack = {
                 viewModel.reloadSettings()
+                viewModel.analyzeMissing()
                 screen = Screen.WATCHLIST
             },
         )

@@ -8,6 +8,7 @@ import com.tinvestanalyst.analysis.MarketAnalyzer
 import com.tinvestanalyst.data.AnalystRepository
 import com.tinvestanalyst.data.AnalystSettingsStore
 import com.tinvestanalyst.data.Instrument
+import com.tinvestanalyst.data.InstrumentCategory
 import com.tinvestanalyst.data.WatchedInstrument
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -48,6 +49,18 @@ data class SearchUiState(
     val error: String? = null,
 )
 
+data class CatalogUiState(
+    val category: InstrumentCategory = InstrumentCategory.SHARES,
+    val visible: List<Instrument> = emptyList(),
+    val totalInCategory: Int = 0,
+    val matchedCount: Int = 0,
+    val query: String = "",
+    val rublesOnly: Boolean = true,
+    val loading: Boolean = false,
+    val error: String? = null,
+    val addedFigis: Set<String> = emptySet(),
+)
+
 class AnalystViewModel(application: Application) : AndroidViewModel(application) {
 
     private val settings = AnalystSettingsStore(application)
@@ -61,6 +74,12 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
 
     private val _search = MutableStateFlow(SearchUiState())
     val search: StateFlow<SearchUiState> = _search.asStateFlow()
+
+    private val _catalog = MutableStateFlow(CatalogUiState())
+    val catalog: StateFlow<CatalogUiState> = _catalog.asStateFlow()
+
+    /** Полный загруженный список текущей категории — фильтры применяются к нему локально. */
+    private var catalogSource: List<Instrument> = emptyList()
 
     private var priceTicker: Job? = null
     private var detailTicker: Job? = null
@@ -233,12 +252,105 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
             ),
         )
         reloadSettings()
-        refreshAll()
+        syncCatalogSelection()
     }
 
     fun removeInstrument(figi: String) {
         settings.removeFromWatchlist(figi)
         reloadSettings()
+        syncCatalogSelection()
+    }
+
+    /** Загружает каталог выбранного типа активов, доступных к торгам через API. */
+    fun loadCatalog(category: InstrumentCategory = _catalog.value.category, forceRefresh: Boolean = false) {
+        viewModelScope.launch {
+            _catalog.value = _catalog.value.copy(category = category, loading = true, error = null)
+            runCatching { repository.loadCatalog(category, forceRefresh) }
+                .onSuccess { instruments ->
+                    catalogSource = instruments
+                    _catalog.value = _catalog.value.copy(
+                        loading = false,
+                        totalInCategory = instruments.size,
+                        addedFigis = settings.watchlist.map { it.figi }.toSet(),
+                    )
+                    applyCatalogFilter()
+                }
+                .onFailure { error ->
+                    catalogSource = emptyList()
+                    _catalog.value = _catalog.value.copy(
+                        loading = false,
+                        visible = emptyList(),
+                        totalInCategory = 0,
+                        error = error.message,
+                    )
+                }
+        }
+    }
+
+    fun setCatalogQuery(query: String) {
+        _catalog.value = _catalog.value.copy(query = query)
+        applyCatalogFilter()
+    }
+
+    fun toggleRublesOnly() {
+        _catalog.value = _catalog.value.copy(rublesOnly = !_catalog.value.rublesOnly)
+        applyCatalogFilter()
+    }
+
+    fun toggleCatalogInstrument(instrument: Instrument) {
+        if (_catalog.value.addedFigis.contains(instrument.figi)) {
+            removeInstrument(instrument.figi)
+        } else {
+            addInstrument(instrument)
+        }
+    }
+
+    /**
+     * Пересчитывает только те бумаги, по которым анализа ещё нет: после
+     * добавления десятка позиций из каталога полный пересчёт всего списка был
+     * бы десятком лишних запросов.
+     */
+    fun analyzeMissing() {
+        if (_uiState.value.rows.none { it.analysis == null }) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isRefreshing = true)
+            val interval = settings.candleInterval
+            val updated = _uiState.value.rows.map { row ->
+                if (row.analysis != null) {
+                    row
+                } else {
+                    runCatching {
+                        val candles = repository.loadCandles(row.instrument.figi, interval)
+                        MarketAnalyzer.analyze(row.instrument, candles)
+                    }.map { row.copy(analysis = it, lastPrice = it.lastPrice) }.getOrDefault(row)
+                }
+            }
+            _uiState.value = _uiState.value.copy(
+                rows = updated,
+                isRefreshing = false,
+                lastUpdateMillis = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    private fun syncCatalogSelection() {
+        _catalog.value = _catalog.value.copy(addedFigis = settings.watchlist.map { it.figi }.toSet())
+    }
+
+    private fun applyCatalogFilter() {
+        val state = _catalog.value
+        val query = state.query.trim()
+        val matched = catalogSource.filter { instrument ->
+            (!state.rublesOnly || instrument.currency.equals("rub", ignoreCase = true)) &&
+                (
+                    query.isEmpty() ||
+                        instrument.ticker.contains(query, ignoreCase = true) ||
+                        instrument.name.contains(query, ignoreCase = true)
+                    )
+        }
+        // Списком в несколько тысяч строк пользоваться невозможно, поэтому
+        // показываем первые 400 и подсказываем сузить поиск.
+        _catalog.value = state.copy(visible = matched.take(400), matchedCount = matched.size)
     }
 
     private fun humanTradingStatus(raw: String): String = when (raw) {
