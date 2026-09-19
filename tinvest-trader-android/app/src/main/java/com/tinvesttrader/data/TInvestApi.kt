@@ -30,6 +30,12 @@ interface TInvestApi {
         @Body request: PostOrderRequest,
     ): PostOrderResponse
 
+    @POST("tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument")
+    suspend fun findInstrument(
+        @Header("Authorization") auth: String,
+        @Body request: FindInstrumentRequest,
+    ): FindInstrumentResponse
+
     @POST("tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio")
     suspend fun getPortfolio(
         @Header("Authorization") auth: String,

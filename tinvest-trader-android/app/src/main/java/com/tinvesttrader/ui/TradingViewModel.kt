@@ -21,7 +21,9 @@ data class DashboardUiState(
     val liveMode: Boolean = false,
     val killSwitchActive: Boolean = false,
     val accountId: String? = null,
+    val accountLabel: String? = null,
     val instrumentFigi: String? = null,
+    val instrumentLabel: String? = null,
     val statusMessage: String? = null,
     val checkInProgress: Boolean = false,
 )
@@ -45,7 +47,9 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
         _uiState.value = _uiState.value.copy(
             liveMode = tokenStore.liveTradingEnabled,
             accountId = tokenStore.accountId,
+            accountLabel = tokenStore.accountLabel,
             instrumentFigi = tokenStore.instrumentFigi,
+            instrumentLabel = tokenStore.instrumentLabel,
             killSwitchActive = RiskManagerHolder.getOrCreate().isKillSwitchActive,
         )
     }

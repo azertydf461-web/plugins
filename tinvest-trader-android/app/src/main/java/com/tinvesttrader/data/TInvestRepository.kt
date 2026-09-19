@@ -55,6 +55,32 @@ class TInvestRepository(private val tokenStore: SecureTokenStore) {
     suspend fun getAccounts(): List<Account> =
         currentApi().getAccounts(currentToken()).accounts
 
+    /**
+     * В песочнице счёта не существует, пока его не откроют через API, поэтому
+     * без этого вызова боту нечего указывать в настройках. На боевом контуре
+     * метод недоступен — счета там заводит сам брокер.
+     */
+    suspend fun openSandboxAccount(): String {
+        check(!isLiveMode) { "Счёт в песочнице создаётся только в SANDBOX-режиме." }
+        return sandboxApi.openSandboxAccount(currentToken()).accountId
+    }
+
+    /** Пополнение виртуального счёта: без денег песочница не даст купить ничего. */
+    suspend fun payInSandbox(accountId: String, rubles: Long): Double {
+        check(!isLiveMode) { "Пополнение доступно только в SANDBOX-режиме." }
+        return sandboxApi.sandboxPayIn(
+            currentToken(),
+            SandboxPayInRequest(accountId, MoneyValue(currency = "rub", units = rubles.toString())),
+        ).balance.toDouble()
+    }
+
+    suspend fun searchInstruments(query: String): List<Instrument> =
+        currentApi().findInstrument(currentToken(), FindInstrumentRequest(query))
+            .instruments
+            .filter { it.figi.isNotBlank() && it.apiTradeAvailableFlag }
+            .distinctBy { it.figi }
+            .take(20)
+
     suspend fun getPortfolio(accountId: String): PortfolioResponse =
         currentApi().getPortfolio(currentToken(), GetPortfolioRequest(accountId))
 

@@ -79,6 +79,28 @@ data class Position(
 )
 
 @Serializable
+data class Instrument(
+    val figi: String = "",
+    val ticker: String = "",
+    val name: String = "",
+    val instrumentType: String = "",
+    val currency: String = "",
+    val lot: Int = 1,
+    val apiTradeAvailableFlag: Boolean = false,
+    val buyAvailableFlag: Boolean = false,
+    val forQualInvestorFlag: Boolean = false,
+)
+
+@Serializable
+data class FindInstrumentRequest(
+    val query: String,
+    val apiTradeAvailableFlag: Boolean = true,
+)
+
+@Serializable
+data class FindInstrumentResponse(val instruments: List<Instrument> = emptyList())
+
+@Serializable
 data class PortfolioResponse(
     val totalAmountShares: MoneyValue,
     val totalAmountCurrencies: MoneyValue,

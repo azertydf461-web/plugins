@@ -21,6 +21,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +51,9 @@ fun DashboardScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val decisions by viewModel.decisions.collectAsState()
+
+    // Возврат из настроек мог сменить счёт, инструмент или режим — перечитываем.
+    LaunchedEffect(Unit) { viewModel.refreshFromStore() }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("T-Invest Trader") }) },
@@ -92,8 +96,17 @@ fun DashboardScreen(
 
             item {
                 Column {
-                    Text("Счёт: ${state.accountId ?: "не выбран"}")
-                    Text("Инструмент (FIGI): ${state.instrumentFigi ?: "не выбран"}")
+                    val notConfigured = state.accountId.isNullOrBlank() || state.instrumentFigi.isNullOrBlank()
+                    Text("Счёт: ${state.accountLabel ?: state.accountId ?: "не выбран"}")
+                    Text("Инструмент: ${state.instrumentLabel ?: state.instrumentFigi ?: "не выбран"}")
+                    if (notConfigured) {
+                        Text(
+                            "Бот не начнёт работу, пока не выбраны счёт и инструмент — откройте настройки.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = WARN_COLOR,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                     Row(modifier = Modifier.padding(vertical = 8.dp)) {
                         Button(
                             onClick = { viewModel.runDecisionCycleNow() },

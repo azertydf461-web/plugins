@@ -45,11 +45,22 @@ class SecureTokenStore(context: Context) {
         get() = prefs.getString(KEY_FIGI, null)
         set(value) = prefs.edit().putString(KEY_FIGI, value).apply()
 
+    /** Человекочитаемые подписи выбранного счёта и бумаги — только для интерфейса. */
+    var accountLabel: String?
+        get() = prefs.getString(KEY_ACCOUNT_LABEL, null)
+        set(value) = prefs.edit().putString(KEY_ACCOUNT_LABEL, value).apply()
+
+    var instrumentLabel: String?
+        get() = prefs.getString(KEY_FIGI_LABEL, null)
+        set(value) = prefs.edit().putString(KEY_FIGI_LABEL, value).apply()
+
     private companion object {
         const val KEY_SANDBOX_TOKEN = "sandbox_token"
         const val KEY_LIVE_TOKEN = "live_token"
         const val KEY_LIVE_ENABLED = "live_trading_enabled"
         const val KEY_ACCOUNT_ID = "account_id"
         const val KEY_FIGI = "instrument_figi"
+        const val KEY_ACCOUNT_LABEL = "account_label"
+        const val KEY_FIGI_LABEL = "instrument_label"
     }
 }
