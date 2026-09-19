@@ -1,0 +1,86 @@
+package com.tinvesttrader.data
+
+import kotlinx.serialization.Serializable
+
+// DTO для T-Invest REST API (invest-public-api.tbank.ru/rest/...).
+// Поля сокращены до того, что реально используется прототипом —
+// полная схема см. в официальной документации API брокера.
+
+@Serializable
+data class MoneyValue(
+    val currency: String,
+    val units: String = "0",
+    val nano: Int = 0,
+) {
+    fun toDouble(): Double = units.toDouble() + nano / 1_000_000_000.0
+}
+
+@Serializable
+data class Quotation(
+    val units: String = "0",
+    val nano: Int = 0,
+) {
+    fun toDouble(): Double = units.toDouble() + nano / 1_000_000_000.0
+}
+
+@Serializable
+data class Account(
+    val id: String,
+    val name: String,
+    val type: String,
+)
+
+@Serializable
+data class GetAccountsResponse(
+    val accounts: List<Account>,
+)
+
+@Serializable
+data class Candle(
+    val open: Quotation,
+    val high: Quotation,
+    val low: Quotation,
+    val close: Quotation,
+    val volume: String,
+    val time: String,
+    val isComplete: Boolean = true,
+)
+
+@Serializable
+data class GetCandlesResponse(
+    val candles: List<Candle>,
+)
+
+@Serializable
+data class PostOrderRequest(
+    val instrumentId: String,
+    val quantity: String,
+    val price: Quotation? = null,
+    val direction: String, // ORDER_DIRECTION_BUY | ORDER_DIRECTION_SELL
+    val accountId: String,
+    val orderType: String, // ORDER_TYPE_MARKET | ORDER_TYPE_LIMIT
+    val orderId: String,
+)
+
+@Serializable
+data class PostOrderResponse(
+    val orderId: String,
+    val executionReportStatus: String,
+    val lotsRequested: Long = 0,
+    val lotsExecuted: Long = 0,
+)
+
+@Serializable
+data class Position(
+    val figi: String,
+    val quantity: Quotation,
+    val averagePositionPrice: MoneyValue,
+    val currentPrice: MoneyValue,
+)
+
+@Serializable
+data class PortfolioResponse(
+    val totalAmountShares: MoneyValue,
+    val totalAmountCurrencies: MoneyValue,
+    val positions: List<Position> = emptyList(),
+)
