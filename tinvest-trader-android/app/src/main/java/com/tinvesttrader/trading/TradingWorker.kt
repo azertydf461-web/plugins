@@ -13,8 +13,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Периодический запуск движка через WorkManager. Минимальный интервал
  * PeriodicWorkRequest в Android — 15 минут; для прототипа этого достаточно
- * (это НЕ HFT, см. README). Для более частого опроса в первой версии
- * лучше держать приложение на переднем плане и использовать foreground-сервис
+ * (это НЕ HFT, см. README). Для более частого опроса нужен foreground-сервис
  * с собственным таймером — сознательно не делаем это первым шагом, чтобы не
  * держать бота включённым в фоне без явного контроля пользователя.
  */
@@ -25,17 +24,28 @@ class TradingWorker(
 
     override suspend fun doWork(): Result {
         val tokenStore = SecureTokenStore(applicationContext)
-        val repository = TInvestRepository(tokenStore)
-        val strategy = SmaCrossoverStrategy()
-        val riskManager = RiskManagerHolder.getOrCreate()
-        val engine = TradingEngine(repository, strategy, riskManager, tokenStore)
+        val journal = DecisionJournal.get(applicationContext)
+        val engine = TradingEngine(
+            repository = TInvestRepository(tokenStore),
+            strategy = SmaCrossoverStrategy(),
+            riskManager = RiskManagerHolder.getOrCreate(),
+            tokenStore = tokenStore,
+            journal = journal,
+        )
 
         return try {
-            val event = engine.tick()
-            EngineEventLog.append(event)
+            engine.tick()
             Result.success()
         } catch (e: Exception) {
-            EngineEventLog.append(EngineEvent.Error("Worker crashed: ${e.message}"))
+            journal.append(
+                DecisionRecord(
+                    timestampMillis = System.currentTimeMillis(),
+                    figi = tokenStore.instrumentFigi.orEmpty(),
+                    action = DecisionAction.ERROR.name,
+                    headline = "Сбой в цикле бота",
+                    marketReasoning = listOf("Непредвиденная ошибка: ${e.message}"),
+                ),
+            )
             Result.retry()
         }
     }
@@ -65,16 +75,4 @@ object RiskManagerHolder {
     @Synchronized
     fun getOrCreate(limits: RiskLimits = RiskLimits()): RiskManager =
         instance ?: RiskManager(limits).also { instance = it }
-}
-
-/** Простой лог событий движка для отображения в UI — в проде заменить на Room. */
-object EngineEventLog {
-    private val _events = mutableListOf<EngineEvent>()
-    val events: List<EngineEvent> get() = _events.toList()
-
-    @Synchronized
-    fun append(event: EngineEvent) {
-        _events.add(0, event)
-        if (_events.size > 200) _events.removeAt(_events.lastIndex)
-    }
 }

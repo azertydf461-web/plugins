@@ -11,6 +11,12 @@ data class RiskLimits(
     val maxDailyLossAmount: Double = 5000.0,
 )
 
+/** Решение риск-менеджера вместе с объяснением, почему оно такое. */
+data class RiskVerdict(
+    val allowed: Boolean,
+    val reasoning: List<String>,
+)
+
 /**
  * Risk manager — единственное место, которое разрешает или запрещает
  * реальный ордер. TradingEngine обязан спрашивать его перед КАЖДЫМ
@@ -23,6 +29,8 @@ class RiskManager(private val limits: RiskLimits) {
     private var killSwitchActive: Boolean = false
 
     val isKillSwitchActive: Boolean get() = killSwitchActive
+    val currentDailyPnl: Double get() = dailyPnl
+    val activeLimits: RiskLimits get() = limits
 
     fun recordRealizedPnl(amount: Double) {
         rolloverDayIfNeeded()
@@ -37,16 +45,48 @@ class RiskManager(private val limits: RiskLimits) {
         killSwitchActive = false
     }
 
-    fun canOpenPosition(currentLots: Long, additionalLots: Long): Boolean {
+    fun checkCanOpenPosition(currentLots: Long, additionalLots: Long): RiskVerdict {
         rolloverDayIfNeeded()
-        if (killSwitchActive) return false
-        return currentLots + additionalLots <= limits.maxPositionLots
+        val reasoning = mutableListOf(
+            "Текущая позиция: $currentLots лот(ов), заявка на +$additionalLots.",
+            "Лимит позиции: ${limits.maxPositionLots} лот(ов).",
+            "Дневной результат: ${fmt(dailyPnl)} при лимите убытка ${fmt(-limits.maxDailyLossAmount)}.",
+        )
+        if (killSwitchActive) {
+            reasoning += "Аварийная блокировка активна — дневной лимит убытка исчерпан."
+            reasoning += "Вердикт: ордер ЗАПРЕЩЁН."
+            return RiskVerdict(allowed = false, reasoning = reasoning)
+        }
+        val fits = currentLots + additionalLots <= limits.maxPositionLots
+        reasoning += if (fits) {
+            "Итоговая позиция ${currentLots + additionalLots} лот(ов) укладывается в лимит."
+        } else {
+            "Итоговая позиция ${currentLots + additionalLots} лот(ов) превысила бы лимит."
+        }
+        reasoning += "Вердикт: ордер ${if (fits) "РАЗРЕШЁН" else "ЗАПРЕЩЁН"}."
+        return RiskVerdict(allowed = fits, reasoning = reasoning)
     }
 
-    fun shouldStopLoss(averageEntryPrice: Double, currentPrice: Double): Boolean {
-        if (averageEntryPrice <= 0) return false
+    /** Проверка стоп-лосса с объяснением: просадка считается от средней цены входа. */
+    fun checkStopLoss(averageEntryPrice: Double, currentPrice: Double): RiskVerdict {
+        if (averageEntryPrice <= 0) {
+            return RiskVerdict(
+                allowed = false,
+                reasoning = listOf("Средняя цена входа неизвестна — стоп-лосс не рассчитывается."),
+            )
+        }
         val dropPercent = (averageEntryPrice - currentPrice) / averageEntryPrice * 100.0
-        return dropPercent >= limits.stopLossPercent
+        val triggered = dropPercent >= limits.stopLossPercent
+        val reasoning = mutableListOf(
+            "Средняя цена входа ${fmt(averageEntryPrice)}, текущая ${fmt(currentPrice)}.",
+            "Просадка ${fmt(dropPercent)}% при пороге стоп-лосса ${fmt(limits.stopLossPercent)}%.",
+            if (triggered) {
+                "Порог пройден — позиция закрывается принудительно, сигнал стратегии игнорируется."
+            } else {
+                "Порог не достигнут — позиция остаётся открытой."
+            },
+        )
+        return RiskVerdict(allowed = triggered, reasoning = reasoning)
     }
 
     private fun rolloverDayIfNeeded() {
