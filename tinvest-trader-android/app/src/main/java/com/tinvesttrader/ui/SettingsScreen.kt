@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -26,6 +27,7 @@ import com.tinvesttrader.data.SecureTokenStore
 
 private const val LIVE_CONFIRMATION_PHRASE = "ТОРГОВАТЬ РЕАЛЬНЫМИ ДЕНЬГАМИ"
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -70,7 +72,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     checked = liveEnabled,
                     onCheckedChange = { checked ->
                         if (checked) {
-                            // Только показываем диалог подтверждения — самую настройку
+                            // Только показываем диалог подтверждения — саму настройку
                             // не меняем, пока пользователь не введёт фразу целиком.
                             showLiveConfirmDialog = true
                         } else {
