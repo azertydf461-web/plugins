@@ -4,7 +4,11 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tinvesttrader.data.Account
+import com.tinvesttrader.data.CheckStatus
+import com.tinvesttrader.data.DiagnosticStep
 import com.tinvesttrader.data.Instrument
+import com.tinvesttrader.data.InstrumentCategory
+import com.tinvesttrader.data.NetworkDiagnostics
 import com.tinvesttrader.data.SecureTokenStore
 import com.tinvesttrader.data.TInvestRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,8 +31,13 @@ data class SettingsUiState(
     val message: String? = null,
     val isError: Boolean = false,
     val searchQuery: String = "",
-    val searchResults: List<Instrument> = emptyList(),
-    val searchBusy: Boolean = false,
+    val category: InstrumentCategory = InstrumentCategory.SHARES,
+    val catalog: List<Instrument> = emptyList(),
+    val catalogMatched: Int = 0,
+    val catalogTotal: Int = 0,
+    val catalogBusy: Boolean = false,
+    val diagnostics: List<DiagnosticStep> = emptyList(),
+    val diagnosticsRunning: Boolean = false,
 )
 
 /**
@@ -41,6 +50,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     private val tokenStore = SecureTokenStore(application)
     private val repository = TInvestRepository(tokenStore)
+    private val diagnostics = NetworkDiagnostics(tokenStore)
+
+    /** Полный каталог текущего вида активов — фильтр применяется локально. */
+    private var catalogSource: List<Instrument> = emptyList()
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -126,42 +139,73 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         reload()
     }
 
-    fun searchInstruments(query: String) {
-        _uiState.value = _uiState.value.copy(searchQuery = query)
-        if (query.trim().length < 2) {
-            _uiState.value = _uiState.value.copy(searchResults = emptyList())
-            return
-        }
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(searchBusy = true)
-            runCatching { repository.searchInstruments(query.trim()) }
-                .onSuccess {
-                    _uiState.value = _uiState.value.copy(searchResults = it, searchBusy = false)
-                    if (it.isEmpty()) report("Ничего не найдено по запросу «$query».", isError = false)
-                }
-                .onFailure {
-                    _uiState.value = _uiState.value.copy(searchBusy = false)
-                    report("Поиск не удался: ${it.message}", isError = true)
-                }
-        }
-    }
-
     fun selectInstrument(instrument: Instrument) {
         tokenStore.instrumentFigi = instrument.figi
         tokenStore.instrumentLabel = "${instrument.ticker} · ${instrument.name}"
         reload()
-        _uiState.value = _uiState.value.copy(searchResults = emptyList(), searchQuery = "")
         report("Инструмент выбран: ${instrument.ticker}.", isError = false)
     }
 
-    fun checkConnection() {
-        launchBusy("Проверяю подключение...") {
-            val accounts = repository.getAccounts()
-            report(
-                "Подключение работает. Счетов у токена: ${accounts.size}.",
-                isError = false,
-            )
+    /** Полная диагностика связи: интернет -> сервер брокера -> токен. */
+    fun runDiagnostics() {
+        if (_uiState.value.diagnosticsRunning) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(diagnosticsRunning = true, diagnostics = emptyList())
+            val steps = runCatching { diagnostics.run() }.getOrElse {
+                listOf(
+                    DiagnosticStep(
+                        title = "Проверка",
+                        status = CheckStatus.FAIL,
+                        detail = "Диагностика не завершилась: ${it.message}",
+                    ),
+                )
+            }
+            _uiState.value = _uiState.value.copy(diagnostics = steps, diagnosticsRunning = false)
         }
+    }
+
+    /** Загружает каталог выбранного вида активов. */
+    fun loadCatalog(category: InstrumentCategory = _uiState.value.category) {
+        if (_uiState.value.catalogBusy) return
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(category = category, catalogBusy = true)
+            runCatching { repository.loadCatalog(category) }
+                .onSuccess { instruments ->
+                    catalogSource = instruments
+                    _uiState.value = _uiState.value.copy(
+                        catalogBusy = false,
+                        catalogTotal = instruments.size,
+                    )
+                    applyCatalogFilter()
+                }
+                .onFailure {
+                    catalogSource = emptyList()
+                    _uiState.value = _uiState.value.copy(
+                        catalogBusy = false,
+                        catalog = emptyList(),
+                        catalogTotal = 0,
+                    )
+                    report("Каталог не загрузился: ${humanError(it)}", isError = true)
+                }
+        }
+    }
+
+    fun filterCatalog(query: String) {
+        _uiState.value = _uiState.value.copy(searchQuery = query)
+        applyCatalogFilter()
+    }
+
+    private fun applyCatalogFilter() {
+        val query = _uiState.value.searchQuery.trim()
+        val matched = catalogSource.filter {
+            query.isEmpty() ||
+                it.ticker.contains(query, ignoreCase = true) ||
+                it.name.contains(query, ignoreCase = true)
+        }
+        _uiState.value = _uiState.value.copy(
+            catalog = matched.take(200),
+            catalogMatched = matched.size,
+        )
     }
 
     private fun launchBusy(progressMessage: String, block: suspend () -> Unit) {

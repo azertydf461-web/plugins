@@ -4,13 +4,22 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tinvestanalyst.ui.AnalystSettingsScreen
 import com.tinvestanalyst.ui.AnalystViewModel
@@ -18,7 +27,11 @@ import com.tinvestanalyst.ui.InstrumentCatalogScreen
 import com.tinvestanalyst.ui.InstrumentDetailScreen
 import com.tinvestanalyst.ui.WatchlistScreen
 
-private enum class Screen { WATCHLIST, DETAIL, SETTINGS, CATALOG }
+private enum class Tab(val title: String, val icon: String) {
+    OVERVIEW("Обзор", "◆"),
+    CATALOG("Каталог", "☰"),
+    SETTINGS("Настройки", "⚙"),
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,55 +44,81 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AnalystApp() {
     val viewModel: AnalystViewModel = viewModel()
-    var screen by remember { mutableStateOf(Screen.WATCHLIST) }
+    var tab by remember { mutableStateOf(Tab.OVERVIEW) }
+    var detailOpen by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = screen != Screen.WATCHLIST) {
-        when (screen) {
-            Screen.DETAIL -> viewModel.closeInstrument()
-            Screen.CATALOG -> viewModel.analyzeMissing()
-            else -> Unit
+    BackHandler(enabled = detailOpen || tab != Tab.OVERVIEW) {
+        if (detailOpen) {
+            viewModel.closeInstrument()
+            detailOpen = false
+        } else {
+            tab = Tab.OVERVIEW
         }
-        screen = Screen.WATCHLIST
     }
 
-    when (screen) {
-        Screen.WATCHLIST -> WatchlistScreen(
-            viewModel = viewModel,
-            onOpenSettings = { screen = Screen.SETTINGS },
-            onOpenCatalog = { screen = Screen.CATALOG },
-            onOpenInstrument = { figi ->
-                viewModel.openInstrument(figi)
-                screen = Screen.DETAIL
-            },
-        )
-
-        Screen.CATALOG -> InstrumentCatalogScreen(
-            viewModel = viewModel,
-            onBack = {
-                viewModel.analyzeMissing()
-                screen = Screen.WATCHLIST
-            },
-        )
-
-        Screen.DETAIL -> InstrumentDetailScreen(
+    if (detailOpen) {
+        InstrumentDetailScreen(
             viewModel = viewModel,
             onBack = {
                 viewModel.closeInstrument()
-                screen = Screen.WATCHLIST
+                detailOpen = false
             },
         )
+        return
+    }
 
-        Screen.SETTINGS -> AnalystSettingsScreen(
-            viewModel = viewModel,
-            onOpenCatalog = { screen = Screen.CATALOG },
-            onBack = {
-                viewModel.reloadSettings()
-                viewModel.analyzeMissing()
-                screen = Screen.WATCHLIST
-            },
-        )
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        when (tab) {
+                            Tab.OVERVIEW -> "Аналитик рынка"
+                            Tab.CATALOG -> "Каталог активов"
+                            Tab.SETTINGS -> "Настройки"
+                        },
+                    )
+                },
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                Tab.entries.forEach { entry ->
+                    NavigationBarItem(
+                        selected = tab == entry,
+                        onClick = {
+                            // Возврат из каталога — момент, когда уместно досчитать
+                            // анализ по только что добавленным бумагам.
+                            if (tab == Tab.CATALOG && entry != Tab.CATALOG) viewModel.analyzeMissing()
+                            tab = entry
+                        },
+                        icon = { Text(entry.icon) },
+                        label = { Text(entry.title) },
+                    )
+                }
+            }
+        },
+    ) { padding ->
+        Surface(Modifier.fillMaxSize().padding(padding)) {
+            when (tab) {
+                Tab.OVERVIEW -> WatchlistScreen(
+                    viewModel = viewModel,
+                    onOpenCatalog = { tab = Tab.CATALOG },
+                    onOpenSettings = { tab = Tab.SETTINGS },
+                    onOpenInstrument = { figi ->
+                        viewModel.openInstrument(figi)
+                        detailOpen = true
+                    },
+                )
+
+                Tab.CATALOG -> InstrumentCatalogScreen(viewModel = viewModel)
+
+                Tab.SETTINGS -> AnalystSettingsScreen(viewModel = viewModel)
+            }
+        }
     }
 }

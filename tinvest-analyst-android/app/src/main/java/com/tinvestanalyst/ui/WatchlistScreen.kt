@@ -49,8 +49,8 @@ fun colorFor(verdict: Verdict): Color = when (verdict) {
 @Composable
 fun WatchlistScreen(
     viewModel: AnalystViewModel,
-    onOpenSettings: () -> Unit,
     onOpenCatalog: () -> Unit,
+    onOpenSettings: () -> Unit,
     onOpenInstrument: (String) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -62,12 +62,9 @@ fun WatchlistScreen(
         onDispose { viewModel.stopPricePolling() }
     }
 
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("Аналитик рынка") }) },
-    ) { padding ->
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+    LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             item {
-                Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                Card(Modifier.fillMaxWidth().padding(top = 12.dp)) {
                     Text(
                         "Технический анализ для самостоятельного решения. Приложение не отправляет " +
                             "заявки и не является индивидуальной инвестиционной рекомендацией.",
@@ -80,13 +77,15 @@ fun WatchlistScreen(
             if (!state.hasToken) {
                 item {
                     Column(Modifier.padding(vertical = 16.dp)) {
-                        Text("Токен не задан", style = MaterialTheme.typography.titleMedium)
+                        Text("Шаг 1: токен", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Вставьте токен T-Инвестиций в настройках — достаточно токена только для чтения.",
+                            "Вставьте токен T-Инвестиций во вкладке «Настройки» — достаточно прав " +
+                                "«только чтение». Там же проверка подключения покажет, всё ли в порядке " +
+                                "с интернетом, VPN и самим токеном.",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Button(onClick = onOpenSettings, modifier = Modifier.padding(top = 8.dp)) {
-                            Text("Открыть настройки")
+                            Text("Перейти в настройки")
                         }
                     }
                 }
@@ -100,12 +99,11 @@ fun WatchlistScreen(
                 ) {
                     Button(
                         onClick = { viewModel.refreshAll() },
-                        enabled = !state.isRefreshing,
+                        enabled = !state.isRefreshing && state.rows.isNotEmpty(),
                     ) {
                         Text(if (state.isRefreshing) "Считаю..." else "Пересчитать анализ")
                     }
-                    OutlinedButton(onClick = onOpenCatalog) { Text("Активы") }
-                    OutlinedButton(onClick = onOpenSettings) { Text("Настройки") }
+                    OutlinedButton(onClick = onOpenCatalog) { Text("Каталог активов") }
                 }
             }
 
@@ -216,7 +214,6 @@ fun WatchlistScreen(
             }
 
             item { Text("", Modifier.padding(bottom = 24.dp)) }
-        }
     }
 }
 

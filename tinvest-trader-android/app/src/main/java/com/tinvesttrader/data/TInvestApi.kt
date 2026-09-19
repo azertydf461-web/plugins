@@ -3,7 +3,7 @@ package com.tinvesttrader.data
 import retrofit2.http.Body
 import retrofit2.http.Header
 import retrofit2.http.POST
-import retrofit2.http.Path
+import retrofit2.http.Url
 
 /**
  * REST-шлюз T-Invest API. Базовый URL переключается между боевым и
@@ -30,11 +30,13 @@ interface TInvestApi {
         @Body request: PostOrderRequest,
     ): PostOrderResponse
 
-    @POST("tinkoff.public.invest.api.contract.v1.InstrumentsService/FindInstrument")
-    suspend fun findInstrument(
+    /** Каталог одного вида активов; путь подставляется из [InstrumentCategory]. */
+    @POST
+    suspend fun getInstruments(
+        @Url url: String,
         @Header("Authorization") auth: String,
-        @Body request: FindInstrumentRequest,
-    ): FindInstrumentResponse
+        @Body request: InstrumentsRequest,
+    ): InstrumentsResponse
 
     @POST("tinkoff.public.invest.api.contract.v1.OperationsService/GetPortfolio")
     suspend fun getPortfolio(

@@ -3,9 +3,9 @@ package com.tinvestanalyst.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -16,12 +16,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,6 +30,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.tinvestanalyst.data.CheckStatus
+import com.tinvestanalyst.data.DiagnosticStep
 
 private val INTERVALS = listOf(
     "CANDLE_INTERVAL_5_MIN",
@@ -41,168 +42,162 @@ private val INTERVALS = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun AnalystSettingsScreen(
-    viewModel: AnalystViewModel,
-    onOpenCatalog: () -> Unit,
-    onBack: () -> Unit,
-) {
+fun AnalystSettingsScreen(viewModel: AnalystViewModel) {
     val state by viewModel.uiState.collectAsState()
-    val search by viewModel.search.collectAsState()
+    val steps by viewModel.diagnosticSteps.collectAsState()
+    val diagnosticsRunning by viewModel.diagnosticsRunning.collectAsState()
     var tokenDraft by remember { mutableStateOf("") }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Настройки") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) { Text("←", style = MaterialTheme.typography.titleLarge) }
-                },
-            )
-        },
-    ) { padding ->
-        LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-            item {
-                Column(Modifier.padding(top = 8.dp)) {
-                    Text("Токен T-Инвестиций", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        if (state.hasToken) {
-                            "Токен сохранён. Введите новый, чтобы заменить."
-                        } else {
-                            "Достаточно токена только для чтения — заявки приложение не отправляет."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedTextField(
-                        value = tokenDraft,
-                        onValueChange = { tokenDraft = it },
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                        singleLine = true,
-                        label = { Text("t.xxxxx...") },
-                    )
+    LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        item {
+            Column(Modifier.padding(top = 12.dp)) {
+                Text("Токен T-Инвестиций", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (state.hasToken) {
+                        "Токен сохранён. Введите новый, чтобы заменить."
+                    } else {
+                        "Нужен токен боевого контура — достаточно прав «только чтение». " +
+                            "Выпускается в веб-кабинете: tbank.ru/invest/settings"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    value = tokenDraft,
+                    onValueChange = { tokenDraft = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    singleLine = true,
+                    label = { Text("t.xxxxx...") },
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
                             viewModel.saveToken(tokenDraft)
                             tokenDraft = ""
+                            viewModel.runDiagnostics()
                         },
                         enabled = tokenDraft.isNotBlank(),
-                        modifier = Modifier.padding(top = 4.dp),
-                    ) { Text("Сохранить токен") }
+                    ) { Text("Сохранить") }
+                    OutlinedButton(
+                        onClick = { viewModel.runDiagnostics() },
+                        enabled = !diagnosticsRunning,
+                    ) { Text("Проверить подключение") }
                 }
             }
+        }
 
+        if (diagnosticsRunning) {
             item {
-                Column(Modifier.padding(top = 16.dp)) {
-                    HorizontalDivider()
-                    Text(
-                        "Таймфрейм анализа",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        INTERVALS.forEach { interval ->
-                            FilterChip(
-                                selected = state.interval == interval,
-                                onClick = { viewModel.setInterval(interval) },
-                                label = { Text(intervalLabel(interval)) },
-                            )
-                        }
-                    }
+                Column(Modifier.padding(top = 8.dp)) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    Text("Проверяю связь...", style = MaterialTheme.typography.labelSmall)
                 }
             }
+        }
 
-            item {
-                Column(Modifier.padding(top = 16.dp)) {
-                    HorizontalDivider()
-                    Text(
-                        "Добавить бумагу",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                    Button(onClick = onOpenCatalog, modifier = Modifier.padding(bottom = 8.dp)) {
-                        Text("Каталог доступных активов")
-                    }
-                    Text(
-                        "Или найдите конкретную бумагу поиском:",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedTextField(
-                        value = search.query,
-                        onValueChange = { viewModel.searchInstruments(it) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        label = { Text("Тикер или название, например SBER") },
-                    )
-                    if (search.loading) Text("Ищу...", style = MaterialTheme.typography.labelSmall)
-                    search.error?.let {
-                        Text(
-                            "Ошибка поиска: $it",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
+        items(steps) { step -> DiagnosticCard(step) }
+
+        item {
+            Column(Modifier.padding(top = 16.dp)) {
+                HorizontalDivider()
+                Text(
+                    "Таймфрейм анализа",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                Text(
+                    "На каких свечах считаются индикаторы.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    INTERVALS.forEach { interval ->
+                        FilterChip(
+                            selected = state.interval == interval,
+                            onClick = { viewModel.setInterval(interval) },
+                            label = { Text(intervalLabel(interval)) },
                         )
                     }
                 }
             }
+        }
 
-            items(search.results) { instrument ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 3.dp)
-                        .clickable { viewModel.addInstrument(instrument) },
-                ) {
-                    Column(Modifier.padding(10.dp)) {
-                        Text(
-                            "${instrument.ticker} · ${instrument.name}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            "${humanType(instrument.instrumentType)} · FIGI ${instrument.figi}",
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                }
-            }
-
-            item {
-                Column(Modifier.padding(top = 16.dp)) {
-                    HorizontalDivider()
-                    Text(
-                        "Список наблюдения (${state.rows.size})",
-                        style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                }
-            }
-
-            items(state.rows) { row ->
+        item {
+            Column(Modifier.padding(top = 16.dp)) {
+                HorizontalDivider()
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Column(Modifier.fillMaxWidth(0.8f)) {
-                        Text(row.instrument.ticker, fontWeight = FontWeight.Medium)
-                        Text(row.instrument.name, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                    }
                     Text(
-                        "Убрать",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.clickable { viewModel.removeInstrument(row.instrument.figi) },
+                        "Список наблюдения (${state.rows.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    if (state.rows.isNotEmpty()) {
+                        Text(
+                            "Очистить всё",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.clickable { viewModel.clearWatchlist() },
+                        )
+                    }
+                }
+                if (state.rows.isEmpty()) {
+                    Text(
+                        "Пусто. Откройте вкладку «Каталог» и выберите бумаги или целую группу.",
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
             }
-
-            item { Text("", Modifier.padding(bottom = 32.dp)) }
         }
+
+        items(state.rows) { row ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(Modifier.fillMaxWidth(0.8f)) {
+                    Text(row.instrument.ticker, fontWeight = FontWeight.Medium)
+                    Text(row.instrument.name, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                }
+                Text(
+                    "Убрать",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.clickable { viewModel.removeInstrument(row.instrument.figi) },
+                )
+            }
+        }
+
+        item { Text("", Modifier.padding(bottom = 32.dp)) }
     }
 }
 
-private fun humanType(type: String): String = when (type.lowercase()) {
-    "share" -> "Акция"
-    "bond" -> "Облигация"
-    "etf" -> "Фонд"
-    "currency" -> "Валюта"
-    "futures" -> "Фьючерс"
-    else -> type
+@Composable
+private fun DiagnosticCard(step: DiagnosticStep) {
+    val color = when (step.status) {
+        CheckStatus.OK -> BUY_COLOR
+        CheckStatus.WARN -> STRONG_SELL_COLOR
+        CheckStatus.FAIL -> MaterialTheme.colorScheme.error
+    }
+    val mark = when (step.status) {
+        CheckStatus.OK -> "✓"
+        CheckStatus.WARN -> "!"
+        CheckStatus.FAIL -> "✕"
+    }
+    Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(mark, color = color, fontWeight = FontWeight.Bold)
+                Text(step.title, fontWeight = FontWeight.Medium)
+            }
+            Text(step.detail, style = MaterialTheme.typography.bodySmall)
+            step.hint?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = color,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+    }
 }

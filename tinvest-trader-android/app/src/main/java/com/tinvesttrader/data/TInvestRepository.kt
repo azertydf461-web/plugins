@@ -8,6 +8,7 @@ import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 private const val LIVE_BASE_URL = "https://invest-public-api.tbank.ru/rest/"
 private const val SANDBOX_BASE_URL = "https://sandbox-invest-public-api.tbank.ru/rest/"
@@ -74,12 +75,29 @@ class TInvestRepository(private val tokenStore: SecureTokenStore) {
         ).balance.toDouble()
     }
 
-    suspend fun searchInstruments(query: String): List<Instrument> =
-        currentApi().findInstrument(currentToken(), FindInstrumentRequest(query))
-            .instruments
-            .filter { it.figi.isNotBlank() && it.apiTradeAvailableFlag }
-            .distinctBy { it.figi }
-            .take(20)
+    // Каталог меняется редко и весит много, поэтому держим его в памяти.
+    private val catalogCache = ConcurrentHashMap<InstrumentCategory, List<Instrument>>()
+
+    /**
+     * Инструменты выбранного вида, доступные к торгам через API. Каталог
+     * отдаёт только боевой контур, поэтому запрос всегда идёт туда: в
+     * песочнице торгуются те же бумаги.
+     */
+    suspend fun loadCatalog(category: InstrumentCategory): List<Instrument> {
+        catalogCache[category]?.let { return it }
+        val token = tokenStore.liveToken?.takeIf { it.isNotBlank() }
+            ?: tokenStore.sandboxToken?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Сначала сохраните токен.")
+        val instruments = liveApi.getInstruments(
+            "tinkoff.public.invest.api.contract.v1.InstrumentsService/${category.endpointPath}",
+            "Bearer $token",
+            InstrumentsRequest(),
+        ).instruments
+            .filter { it.apiTradeAvailableFlag && it.buyAvailableFlag && it.figi.isNotBlank() }
+            .sortedBy { it.ticker }
+        catalogCache[category] = instruments
+        return instruments
+    }
 
     suspend fun getPortfolio(accountId: String): PortfolioResponse =
         currentApi().getPortfolio(currentToken(), GetPortfolioRequest(accountId))

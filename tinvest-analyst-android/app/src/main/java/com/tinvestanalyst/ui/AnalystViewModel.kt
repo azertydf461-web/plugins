@@ -7,7 +7,10 @@ import com.tinvestanalyst.analysis.MarketAnalysis
 import com.tinvestanalyst.analysis.MarketAnalyzer
 import com.tinvestanalyst.data.AnalystRepository
 import com.tinvestanalyst.data.AnalystSettingsStore
+import com.tinvestanalyst.data.CheckStatus
+import com.tinvestanalyst.data.DiagnosticStep
 import com.tinvestanalyst.data.Instrument
+import com.tinvestanalyst.data.NetworkDiagnostics
 import com.tinvestanalyst.data.InstrumentCategory
 import com.tinvestanalyst.data.WatchedInstrument
 import kotlinx.coroutines.Job
@@ -77,6 +80,14 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
 
     private val _catalog = MutableStateFlow(CatalogUiState())
     val catalog: StateFlow<CatalogUiState> = _catalog.asStateFlow()
+
+    private val diagnostics = NetworkDiagnostics(settings)
+
+    private val _diagnosticSteps = MutableStateFlow<List<DiagnosticStep>>(emptyList())
+    val diagnosticSteps: StateFlow<List<DiagnosticStep>> = _diagnosticSteps.asStateFlow()
+
+    private val _diagnosticsRunning = MutableStateFlow(false)
+    val diagnosticsRunning: StateFlow<Boolean> = _diagnosticsRunning.asStateFlow()
 
     /** Полный загруженный список текущей категории — фильтры применяются к нему локально. */
     private var catalogSource: List<Instrument> = emptyList()
@@ -331,6 +342,47 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
                 lastUpdateMillis = System.currentTimeMillis(),
             )
         }
+    }
+
+    fun runDiagnostics() {
+        if (_diagnosticsRunning.value) return
+        viewModelScope.launch {
+            _diagnosticsRunning.value = true
+            _diagnosticSteps.value = emptyList()
+            _diagnosticSteps.value = runCatching { diagnostics.run() }.getOrElse { error ->
+                listOf(
+                    DiagnosticStep(
+                        title = "Проверка",
+                        status = CheckStatus.FAIL,
+                        detail = "Диагностика не завершилась: ${error.message}",
+                    ),
+                )
+            }
+            _diagnosticsRunning.value = false
+            reloadSettings()
+        }
+    }
+
+    /** Добавляет в наблюдение всю отфильтрованную группу — например, все рублёвые акции. */
+    fun addVisibleGroup() {
+        val toAdd = _catalog.value.visible.filterNot { _catalog.value.addedFigis.contains(it.figi) }
+        toAdd.forEach { instrument ->
+            settings.addToWatchlist(
+                WatchedInstrument(
+                    figi = instrument.figi,
+                    ticker = instrument.ticker.ifBlank { instrument.figi },
+                    name = instrument.name.ifBlank { instrument.ticker },
+                ),
+            )
+        }
+        reloadSettings()
+        syncCatalogSelection()
+    }
+
+    fun clearWatchlist() {
+        settings.watchlist = emptyList()
+        reloadSettings()
+        syncCatalogSelection()
     }
 
     private fun syncCatalogSelection() {

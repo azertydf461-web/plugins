@@ -91,14 +91,23 @@ data class Instrument(
     val forQualInvestorFlag: Boolean = false,
 )
 
+/** Каталог инструментов брокера: один вид активов на запрос. */
+enum class InstrumentCategory(val title: String, val endpointPath: String) {
+    SHARES("Акции", "Shares"),
+    BONDS("Облигации", "Bonds"),
+    ETFS("Фонды", "Etfs"),
+    CURRENCIES("Валюты", "Currencies"),
+    FUTURES("Фьючерсы", "Futures"),
+}
+
 @Serializable
-data class FindInstrumentRequest(
-    val query: String,
-    val apiTradeAvailableFlag: Boolean = true,
+data class InstrumentsRequest(
+    /** Только то, чем реально можно торговать через API. */
+    val instrumentStatus: String = "INSTRUMENT_STATUS_BASE",
 )
 
 @Serializable
-data class FindInstrumentResponse(val instruments: List<Instrument> = emptyList())
+data class InstrumentsResponse(val instruments: List<Instrument> = emptyList())
 
 @Serializable
 data class PortfolioResponse(
