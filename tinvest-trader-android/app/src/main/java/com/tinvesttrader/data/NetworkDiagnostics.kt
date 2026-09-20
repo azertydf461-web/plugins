@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
@@ -21,6 +22,10 @@ private const val LIVE_HOST = "invest-public-api.tbank.ru"
 private const val SANDBOX_HOST = "sandbox-invest-public-api.tbank.ru"
 private const val ACCOUNTS_PATH =
     "rest/tinkoff.public.invest.api.contract.v1.UsersService/GetAccounts"
+
+// Без этого заголовка шлюз брокера отвечает 415 ещё до проверки токена,
+// и проверка выглядит как «токен не принят».
+private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
 /**
  * Пошаговая проверка связи: DNS -> TLS-соединение -> ответ на запрос с
@@ -80,7 +85,7 @@ class NetworkDiagnostics(private val tokenStore: SecureTokenStore) {
     }
 
     private fun checkReachability(client: OkHttpClient, url: String): DiagnosticStep {
-        val request = Request.Builder().url(url).post("{}".toRequestBody()).build()
+        val request = Request.Builder().url(url).post("{}".toRequestBody(JSON_MEDIA_TYPE)).build()
         return runCatching {
             client.newCall(request).execute().use { response ->
                 DiagnosticStep(
@@ -144,7 +149,7 @@ class NetworkDiagnostics(private val tokenStore: SecureTokenStore) {
         val request = Request.Builder()
             .url(url)
             .addHeader("Authorization", "Bearer $value")
-            .post("{}".toRequestBody())
+            .post("{}".toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
         return runCatching {
