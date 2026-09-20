@@ -185,6 +185,53 @@ class TInvestRepository(private val tokenStore: SecureTokenStore) {
             ),
         )
     }
+
+    /**
+     * Защитная стоп-заявка на продажу: живёт на сервере брокера и срабатывает
+     * сама, без участия приложения. Без неё стоп-лосс работает только когда
+     * бот проснулся, а на разрыве цены это значит убыток заметно больше
+     * задуманного.
+     */
+    suspend fun placeProtectiveStop(
+        accountId: String,
+        figi: String,
+        lots: Long,
+        stopPrice: Double,
+    ): String {
+        require(lots > 0) { "Количество лотов должно быть положительным" }
+        require(stopPrice > 0) { "Цена стопа должна быть положительной" }
+        return currentApi().postStopOrder(
+            currentToken(),
+            PostStopOrderRequest(
+                instrumentId = figi,
+                quantity = lots.toString(),
+                stopPrice = stopPrice.toQuotation(),
+                direction = "STOP_ORDER_DIRECTION_SELL",
+                accountId = accountId,
+                // Заявка не должна истекать сама: позиция может держаться
+                // дольше торгового дня, а незащищённая позиция недопустима.
+                expirationType = "STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL",
+                stopOrderType = "STOP_ORDER_TYPE_STOP_LOSS",
+            ),
+        ).stopOrderId
+    }
+
+    suspend fun getStopOrders(accountId: String): List<StopOrder> =
+        currentApi().getStopOrders(currentToken(), GetStopOrdersRequest(accountId)).stopOrders
+
+    suspend fun cancelStopOrder(accountId: String, stopOrderId: String) {
+        currentApi().cancelStopOrder(
+            currentToken(),
+            CancelStopOrderRequest(accountId = accountId, stopOrderId = stopOrderId),
+        )
+    }
+}
+
+/** Цена в формате API: целая часть и миллиардные доли отдельно. */
+internal fun Double.toQuotation(): Quotation {
+    val units = kotlin.math.floor(this).toLong()
+    val nano = ((this - units) * 1_000_000_000).toInt()
+    return Quotation(units = units.toString(), nano = nano)
 }
 
 enum class OrderDirection(val wireValue: String) {

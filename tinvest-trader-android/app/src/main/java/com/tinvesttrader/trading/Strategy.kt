@@ -28,11 +28,20 @@ data class StrategyDecision(
     /** Пошаговое обоснование: что посчитали и почему вышел такой сигнал. */
     val reasoning: List<String>,
     val indicators: IndicatorSnapshot?,
+    /** Время свечи, на которой произошло пересечение, если оно найдено. */
+    val signalCandleTime: String? = null,
+    /** Сколько свечей назад случилось пересечение: 0 — на последней. */
+    val barsSinceSignal: Int = 0,
 )
 
 interface Strategy {
-    /** Свечи должны идти в хронологическом порядке (старая -> новая). */
-    fun evaluate(candles: List<Candle>): StrategyDecision
+    /**
+     * Свечи должны идти в хронологическом порядке (старая -> новая).
+     * [barsToScan] — сколько последних свечей проверять на пересечение:
+     * бот просыпается по расписанию и между проверками пропускает свечи,
+     * поэтому смотреть только на последнюю нельзя.
+     */
+    fun evaluate(candles: List<Candle>, barsToScan: Int = 1): StrategyDecision
 }
 
 /**
@@ -53,7 +62,7 @@ class SmaCrossoverStrategy(
         }
     }
 
-    override fun evaluate(candles: List<Candle>): StrategyDecision {
+    override fun evaluate(candles: List<Candle>, barsToScan: Int): StrategyDecision {
         if (candles.size < slowPeriod + 1) {
             return StrategyDecision(
                 signal = Signal.HOLD,
@@ -78,10 +87,13 @@ class SmaCrossoverStrategy(
             candlesAnalyzed = candles.size,
         )
 
-        val crossedUp = snapshot.fastSmaPrevious <= snapshot.slowSmaPrevious &&
-            snapshot.fastSmaCurrent > snapshot.slowSmaCurrent
-        val crossedDown = snapshot.fastSmaPrevious >= snapshot.slowSmaPrevious &&
-            snapshot.fastSmaCurrent < snapshot.slowSmaCurrent
+        // Ищем пересечение не только на последней свече, но и на всех, что
+        // бот мог проспать между проверками. Раньше сигнал, случившийся в
+        // пропущенный интервал, терялся навсегда: следующая проверка видела
+        // уже установившийся тренд и считала, что входить поздно.
+        val scan = findCrossover(candles, closes, barsToScan.coerceAtLeast(1))
+        val crossedUp = scan?.up == true
+        val crossedDown = scan?.up == false
 
         val reasoning = mutableListOf(
             "Проанализировано свечей: ${snapshot.candlesAnalyzed}, последняя цена ${fmt(snapshot.lastPrice)}.",
@@ -90,6 +102,19 @@ class SmaCrossoverStrategy(
             "Быстрая SMA ${if (snapshot.spreadPercent >= 0) "выше" else "ниже"} медленной на " +
                 "${fmt(kotlin.math.abs(snapshot.spreadPercent))}%.",
         )
+
+        if (barsToScan > 1) {
+            reasoning += "Проверено на пересечения последних $barsToScan свечей — " +
+                "столько бот мог пропустить с прошлой проверки."
+        }
+        scan?.let {
+            reasoning += if (it.barsAgo == 0) {
+                "Пересечение произошло на последней свече."
+            } else {
+                "Пересечение произошло ${it.barsAgo} свеч(и) назад (${it.time}) — " +
+                    "в интервал, когда бот не смотрел на рынок."
+            }
+        }
 
         val signal = when {
             crossedUp -> {
@@ -110,7 +135,40 @@ class SmaCrossoverStrategy(
             }
         }
 
-        return StrategyDecision(signal, reasoning, snapshot)
+        return StrategyDecision(
+            signal = signal,
+            reasoning = reasoning,
+            indicators = snapshot,
+            signalCandleTime = scan?.time,
+            barsSinceSignal = scan?.barsAgo ?: 0,
+        )
+    }
+
+    private data class Crossover(val up: Boolean, val barsAgo: Int, val time: String?)
+
+    /**
+     * Самое свежее пересечение в пределах окна. Если за окно их было
+     * несколько, берётся последнее: именно оно описывает текущее состояние
+     * рынка, а отыгрывать отменённый более старый сигнал смысла нет.
+     */
+    private fun findCrossover(
+        candles: List<Candle>,
+        closes: List<Double>,
+        barsToScan: Int,
+    ): Crossover? {
+        val maxOffset = minOf(barsToScan, closes.size - slowPeriod - 1)
+        for (offset in 0 until maxOffset) {
+            val end = closes.size - offset
+            if (end - slowPeriod - 1 < 0) break
+            val fastNow = sma(closes, end, fastPeriod)
+            val slowNow = sma(closes, end, slowPeriod)
+            val fastBefore = sma(closes, end - 1, fastPeriod)
+            val slowBefore = sma(closes, end - 1, slowPeriod)
+            val time = candles.getOrNull(end - 1)?.time?.take(16)?.replace('T', ' ')
+            if (fastBefore <= slowBefore && fastNow > slowNow) return Crossover(true, offset, time)
+            if (fastBefore >= slowBefore && fastNow < slowNow) return Crossover(false, offset, time)
+        }
+        return null
     }
 
     /** Среднее по последним [period] значениям, заканчивающимся индексом [endExclusive]. */

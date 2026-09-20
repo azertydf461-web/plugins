@@ -54,6 +54,28 @@ interface TInvestApi {
         @Header("Authorization") auth: String,
         @Body request: SandboxPayInRequest,
     ): SandboxPayInResponse
+
+    /**
+     * Стоп-заявка исполняется на стороне брокера, поэтому защищает позицию
+     * и тогда, когда приложение выгружено из памяти.
+     */
+    @POST("tinkoff.public.invest.api.contract.v1.StopOrdersService/PostStopOrder")
+    suspend fun postStopOrder(
+        @Header("Authorization") auth: String,
+        @Body request: PostStopOrderRequest,
+    ): PostStopOrderResponse
+
+    @POST("tinkoff.public.invest.api.contract.v1.StopOrdersService/GetStopOrders")
+    suspend fun getStopOrders(
+        @Header("Authorization") auth: String,
+        @Body request: GetStopOrdersRequest,
+    ): GetStopOrdersResponse
+
+    @POST("tinkoff.public.invest.api.contract.v1.StopOrdersService/CancelStopOrder")
+    suspend fun cancelStopOrder(
+        @Header("Authorization") auth: String,
+        @Body request: CancelStopOrderRequest,
+    ): CancelStopOrderResponse
 }
 
 @kotlinx.serialization.Serializable

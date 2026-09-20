@@ -3,17 +3,21 @@ package com.tinvesttrader.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -36,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tinvesttrader.data.CheckStatus
@@ -333,6 +338,8 @@ fun SettingsScreen(
                 }
             }
 
+            item { RiskSettingsSection(state, viewModel) }
+
             item {
                 Button(onClick = onBack, modifier = Modifier.padding(vertical = 24.dp)) {
                     Text("Готово")
@@ -350,6 +357,125 @@ fun SettingsScreen(
             onDismiss = { showLiveConfirmDialog = false },
         )
     }
+}
+
+private val BOT_INTERVALS = listOf(
+    "CANDLE_INTERVAL_15_MIN" to "15 минут (рекомендуется)",
+    "CANDLE_INTERVAL_HOUR" to "1 час",
+    "CANDLE_INTERVAL_5_MIN" to "5 минут",
+)
+
+/**
+ * Раздел про риск и таймфрейм. Вынесен в настройки, потому что оба параметра
+ * меняют поведение бота сильнее, чем что-либо ещё: слишком мелкие свечи он
+ * не успевает отсматривать, а стоп определяет, сколько он теряет на неудачной
+ * сделке.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RiskSettingsSection(state: SettingsUiState, viewModel: SettingsViewModel) {
+    Column(Modifier.padding(top = 16.dp)) {
+        HorizontalDivider()
+        Text(
+            "Таймфрейм бота",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 12.dp),
+        )
+        Text(
+            "Бот просыпается раз в 15 минут — это ограничение Android. Свечи мельче " +
+                "этого он видит не все, поэтому 5 минут оставлены только для " +
+                "сравнения на истории.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BOT_INTERVALS.forEach { (value, title) ->
+                FilterChip(
+                    selected = state.candleInterval == value,
+                    onClick = { viewModel.setCandleInterval(value) },
+                    label = { Text(title) },
+                )
+            }
+        }
+
+        Text(
+            "Стоп-лосс",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 16.dp),
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = state.stopMode == "ATR",
+                onClick = { viewModel.setStopMode("ATR") },
+                label = { Text("По волатильности") },
+            )
+            FilterChip(
+                selected = state.stopMode == "PERCENT",
+                onClick = { viewModel.setStopMode("PERCENT") },
+                label = { Text("Фиксированный %") },
+            )
+        }
+        Text(
+            if (state.stopMode == "ATR") {
+                "Расстояние до стопа считается от размаха свечей этой бумаги. " +
+                    "Одинаковый для всех процент либо режет позицию на обычном шуме, " +
+                    "либо пропускает реальное падение."
+            } else {
+                "Одно и то же расстояние для любой бумаги — просто, но не учитывает, " +
+                    "насколько она подвижна."
+            },
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        if (state.stopMode == "ATR") {
+            NumberSetting(
+                label = "Множитель ATR",
+                value = state.atrMultiplier,
+                onValueChange = { viewModel.setAtrMultiplier(it) },
+            )
+        } else {
+            NumberSetting(
+                label = "Стоп-лосс, % от цены входа",
+                value = state.stopLossPercent,
+                onValueChange = { viewModel.setStopLossPercent(it) },
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Стоп-заявка у брокера", style = MaterialTheme.typography.titleSmall)
+            Switch(
+                checked = state.protectiveStopEnabled,
+                onCheckedChange = { viewModel.setProtectiveStopEnabled(it) },
+            )
+        }
+        Text(
+            "Включено: после покупки бот выставляет стоп-заявку на сервере брокера, " +
+                "и она срабатывает сама, даже когда приложение выгружено из памяти. " +
+                "Выключено: стоп сработает только на очередной проверке — на разрыве " +
+                "цены убыток окажется больше. В песочнице стоп-заявки может не быть, " +
+                "тогда бот честно напишет об этом в журнале.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+/** Значение правится в черновике: стирание последней цифры не должно обнулять настройку. */
+@Composable
+private fun NumberSetting(label: String, value: Double, onValueChange: (Double) -> Unit) {
+    var draft by remember(value) { mutableStateOf(if (value == 0.0) "" else value.toString()) }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = { text ->
+            draft = text.replace(',', '.').filter { it.isDigit() || it == '.' }
+            draft.toDoubleOrNull()?.let(onValueChange)
+        },
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        label = { Text(label) },
+    )
 }
 
 @Composable

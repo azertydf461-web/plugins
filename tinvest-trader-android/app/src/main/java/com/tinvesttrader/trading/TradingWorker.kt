@@ -28,7 +28,7 @@ class TradingWorker(
         val engine = TradingEngine(
             repository = TInvestRepository(tokenStore),
             strategy = SmaCrossoverStrategy(),
-            riskManager = RiskManagerHolder.getOrCreate(),
+            riskManager = RiskManagerHolder.configure(RiskManagerHolder.limitsFrom(tokenStore)),
             tokenStore = tokenStore,
             journal = journal,
         )
@@ -75,4 +75,27 @@ object RiskManagerHolder {
     @Synchronized
     fun getOrCreate(limits: RiskLimits = RiskLimits()): RiskManager =
         instance ?: RiskManager(limits).also { instance = it }
+
+    /**
+     * Пересобирает менеджер под изменённые настройки риска. Аварийная
+     * блокировка переносится в новый экземпляр: смена настроек не должна
+     * снимать защиту, включившуюся из-за дневного убытка.
+     */
+    @Synchronized
+    fun configure(limits: RiskLimits): RiskManager {
+        val existing = instance
+        if (existing != null && existing.activeLimits == limits) return existing
+        return RiskManager(limits)
+            .also { fresh ->
+                if (existing?.isKillSwitchActive == true) fresh.activateKillSwitch()
+                instance = fresh
+            }
+    }
+
+    /** Лимиты, собранные из пользовательских настроек. */
+    fun limitsFrom(store: SecureTokenStore): RiskLimits = RiskLimits(
+        stopLossPercent = store.stopLossPercent,
+        stopMode = runCatching { StopMode.valueOf(store.stopMode) }.getOrDefault(StopMode.ATR),
+        atrMultiplier = store.atrMultiplier,
+    )
 }

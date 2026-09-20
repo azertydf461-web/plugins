@@ -34,6 +34,20 @@ data class BotBacktestSettings(
     val stopLossPercent: Double = 3.0,
     /** Сколько свечей бот передаёт стратегии за раз. */
     val windowBars: Int = 150,
+    /**
+     * Досматривать ли пропущенные свечи на пересечения. Выключено — это
+     * поведение бота до правки: он смотрел только на последнюю свечу.
+     */
+    val scanMissedBars: Boolean = true,
+    /**
+     * Стоп-заявка у брокера. Включено — стоп срабатывает в момент касания
+     * уровня; выключено — только на ближайшей проверке, как было раньше.
+     */
+    val brokerStopOrder: Boolean = true,
+    /** Считать расстояние до стопа от волатильности, а не фиксированным процентом. */
+    val atrStop: Boolean = true,
+    val atrMultiplier: Double = 2.0,
+    val maxStopPercent: Double = 8.0,
 )
 
 data class BotBacktestResult(
@@ -58,6 +72,11 @@ data class BotBacktestResult(
     val costPerTradePercent: Double,
     /** Сколько сделок было бы, проверяй бот каждую свечу — мера пропущенных сигналов. */
     val tradeCountIfPolledEveryBar: Int,
+    /** Те же свечи на старой логике: слепой к пропускам бот с мягким стопом в 3%. */
+    val legacyTradeCount: Int,
+    val legacyExpectancyPercent: Double,
+    val legacyTotalReturnPercent: Double,
+    val legacyWorstTradePercent: Double,
     val verdict: String,
     val caveats: List<String>,
 )
@@ -90,6 +109,15 @@ object StrategyBacktest {
         } else {
             simulate(strategy, candles, settings.copy(pollEveryNBars = 1))
         }
+        // Старое поведение на тех же свечах: так видно, что именно дали
+        // досмотр пропущенных свечей и стоп-заявка у брокера.
+        val legacyTrades = simulate(
+            strategy,
+            candles,
+            settings.copy(scanMissedBars = false, brokerStopOrder = false, atrStop = false),
+        )
+        var legacyEquity = 1.0
+        legacyTrades.forEach { legacyEquity *= (1 + it.resultPercent / 100) }
 
         val costPerTrade = (settings.commissionPercent + settings.spreadPercent) * 2
         val wins = trades.filter { it.resultPercent > 0 }
@@ -108,10 +136,12 @@ object StrategyBacktest {
         }
 
         val stopExits = trades.filter { it.reason == BotExitReason.STOP_LOSS }
-        // Насколько убыток по стопу вышел за заявленные 3%: именно это и есть
-        // цена того, что бот смотрит на рынок по расписанию.
+        // Насколько глубже стопа оказался худший выход. Со стоп-заявкой это
+        // цена разрывов цены, без неё — цена того, что бот смотрит на рынок
+        // по расписанию.
+        val nominalStopPercent = if (settings.atrStop) settings.maxStopPercent else settings.stopLossPercent
         val overshoot = stopExits.minOfOrNull { it.resultPercent + costPerTrade }
-            ?.let { -it - settings.stopLossPercent }
+            ?.let { -it - nominalStopPercent }
             ?.coerceAtLeast(0.0) ?: 0.0
 
         val firstClose = candles[warmup].close.toDouble()
@@ -139,6 +169,14 @@ object StrategyBacktest {
             worstStopOvershootPercent = overshoot,
             costPerTradePercent = costPerTrade,
             tradeCountIfPolledEveryBar = idealTrades.size,
+            legacyTradeCount = legacyTrades.size,
+            legacyExpectancyPercent = if (legacyTrades.isEmpty()) {
+                0.0
+            } else {
+                legacyTrades.sumOf { it.resultPercent } / legacyTrades.size
+            },
+            legacyTotalReturnPercent = (legacyEquity - 1) * 100,
+            legacyWorstTradePercent = legacyTrades.minOfOrNull { it.resultPercent } ?: 0.0,
             verdict = verdictFor(trades.size, expectancy, (equity - 1) * 100, buyHold, drawdown),
             caveats = caveats(settings, trades.size, idealTrades.size),
         )
@@ -155,53 +193,99 @@ object StrategyBacktest {
 
         var entryBar = -1
         var entryPrice = 0.0
+        var stopPrice = 0.0
         var poll = settings.windowBars
 
         while (poll < candles.size - 1) {
             val window = candles.subList(poll - settings.windowBars + 1, poll + 1)
-            val decision = strategy.evaluate(window)
-            val closeNow = candles[poll].close.toDouble()
-            // Бот всегда исполняет по рынку уже после того, как увидел
-            // картину, поэтому ценой сделки берётся открытие следующей свечи.
+            val barsToScan = if (settings.scanMissedBars) step else 1
+            val decision = strategy.evaluate(window, barsToScan)
             val fillPrice = candles[poll + 1].open.toDouble()
 
             if (entryBar < 0) {
                 if (decision.signal == Signal.BUY && fillPrice > 0) {
                     entryBar = poll + 1
                     entryPrice = fillPrice
+                    stopPrice = stopPriceFor(entryPrice, window, settings)
+                }
+                poll += step
+                continue
+            }
+
+            if (settings.brokerStopOrder) {
+                // Стоп-заявка живёт у брокера и срабатывает в момент касания,
+                // поэтому проверяется каждая свеча интервала, а не только та,
+                // на которой бот проснулся.
+                val touchBar = (entryBar..minOf(poll, candles.size - 1))
+                    .firstOrNull { it > entryBar && candles[it].low.toDouble() <= stopPrice }
+                if (touchBar != null) {
+                    // Если свеча открылась ниже стопа, брокер исполнит заявку
+                    // по открытию, а не по уровню: разрыв цены не перепрыгнуть
+                    // даже биржевой заявкой, и обещать обратное нельзя.
+                    val fill = minOf(stopPrice, candles[touchBar].open.toDouble())
+                    trades += trade(candles, entryBar, entryPrice, touchBar, fill, BotExitReason.STOP_LOSS, costPerTrade)
+                    entryBar = -1
+                    poll += step
+                    continue
                 }
             } else {
-                val dropPercent = (entryPrice - closeNow) / entryPrice * 100
-                val stopTriggered = dropPercent >= settings.stopLossPercent
-                if (stopTriggered || decision.signal == Signal.SELL) {
-                    trades += BotTrade(
-                        entryTime = shortTime(candles[entryBar].time),
-                        entryPrice = entryPrice,
-                        exitTime = shortTime(candles[poll + 1].time),
-                        exitPrice = fillPrice,
-                        reason = if (stopTriggered) BotExitReason.STOP_LOSS else BotExitReason.SIGNAL,
-                        resultPercent = (fillPrice - entryPrice) / entryPrice * 100 - costPerTrade,
-                        barsHeld = poll + 1 - entryBar,
-                    )
+                // Мягкий стоп: бот замечает просадку только на проверке и
+                // закрывается по следующей цене, какой бы она ни была.
+                val lowSinceLastPoll = ((poll - step + 1).coerceAtLeast(entryBar)..poll)
+                    .minOfOrNull { candles[it].low.toDouble() } ?: candles[poll].low.toDouble()
+                if (lowSinceLastPoll <= stopPrice) {
+                    trades += trade(candles, entryBar, entryPrice, poll + 1, fillPrice, BotExitReason.STOP_LOSS, costPerTrade)
                     entryBar = -1
+                    poll += step
+                    continue
                 }
+            }
+
+            if (decision.signal == Signal.SELL) {
+                trades += trade(candles, entryBar, entryPrice, poll + 1, fillPrice, BotExitReason.SIGNAL, costPerTrade)
+                entryBar = -1
             }
             poll += step
         }
 
         if (entryBar >= 0) {
             val exitPrice = candles.last().close.toDouble()
-            trades += BotTrade(
-                entryTime = shortTime(candles[entryBar].time),
-                entryPrice = entryPrice,
-                exitTime = shortTime(candles.last().time),
-                exitPrice = exitPrice,
-                reason = BotExitReason.END,
-                resultPercent = (exitPrice - entryPrice) / entryPrice * 100 - costPerTrade,
-                barsHeld = candles.size - 1 - entryBar,
+            trades += trade(
+                candles, entryBar, entryPrice, candles.size - 1, exitPrice,
+                BotExitReason.END, costPerTrade,
             )
         }
         return trades
+    }
+
+    private fun trade(
+        candles: List<Candle>,
+        entryBar: Int,
+        entryPrice: Double,
+        exitBar: Int,
+        exitPrice: Double,
+        reason: BotExitReason,
+        costPerTrade: Double,
+    ): BotTrade = BotTrade(
+        entryTime = shortTime(candles[entryBar].time),
+        entryPrice = entryPrice,
+        exitTime = shortTime(candles[exitBar.coerceAtMost(candles.size - 1)].time),
+        exitPrice = exitPrice,
+        reason = reason,
+        resultPercent = (exitPrice - entryPrice) / entryPrice * 100 - costPerTrade,
+        barsHeld = exitBar - entryBar,
+    )
+
+    private fun stopPriceFor(
+        entryPrice: Double,
+        window: List<Candle>,
+        settings: BotBacktestSettings,
+    ): Double {
+        val atr = if (settings.atrStop) Volatility.atr(window) else null
+        if (atr == null || atr <= 0) return entryPrice * (1 - settings.stopLossPercent / 100)
+        val byAtr = entryPrice - settings.atrMultiplier * atr
+        val floor = entryPrice * (1 - settings.maxStopPercent / 100)
+        return maxOf(byAtr, floor)
     }
 
     private fun verdictFor(
@@ -236,20 +320,40 @@ object StrategyBacktest {
         idealTradeCount: Int,
     ): List<String> = buildList {
         add(
-            "Стоп-лосс у бота мягкий: биржевой стоп-заявки он не выставляет, а закрывает " +
-                "позицию на ближайшей проверке. На разрыве цены убыток окажется больше " +
-                "заявленных ${fmt(settings.stopLossPercent)}%.",
+            if (settings.brokerStopOrder) {
+                "Стоп-заявка стоит у брокера и срабатывает в момент касания уровня. " +
+                    "Разрыв цены она всё равно не перепрыгнет: если торги открылись ниже " +
+                    "стопа, в расчёте взято именно это худшее открытие."
+            } else {
+                "Стоп мягкий: биржевой заявки нет, позиция закрывается на ближайшей " +
+                    "проверке, и на разрыве цены убыток окажется больше заявленного."
+            },
+        )
+        add(
+            if (settings.atrStop) {
+                "Расстояние до стопа считается от волатильности (${fmt(settings.atrMultiplier)} x ATR) " +
+                    "с потолком ${fmt(settings.maxStopPercent)}%, а не одинаковым для всех процентом."
+            } else {
+                "Стоп задан фиксированным процентом ${fmt(settings.stopLossPercent)}% независимо " +
+                    "от того, насколько бумага подвижна."
+            },
         )
         if (settings.pollEveryNBars > 1) {
             add(
-                "Бот смотрит на рынок каждую ${settings.pollEveryNBars}-ю свечу. Проверяй он каждую, " +
-                    "сделок было бы $idealTradeCount вместо $tradeCount — разница и есть " +
-                    "пропущенные пересечения.",
+                if (settings.scanMissedBars) {
+                    "Бот просыпается каждую ${settings.pollEveryNBars}-ю свечу, но досматривает " +
+                        "пропущенные: сделок $tradeCount против $idealTradeCount при непрерывном " +
+                        "наблюдении — остаток разницы это сигналы, отменившиеся до его пробуждения."
+                } else {
+                    "Бот смотрит только на последнюю свечу и пропускает пересечения: " +
+                        "$tradeCount сделок против $idealTradeCount при проверке каждой свечи."
+                },
             )
         }
         add(
             "Фоновая задача Android запускается не раньше чем раз в 15 минут и может " +
-                "задержаться сильнее при экономии батареи, так что вживую пропусков будет больше.",
+                "задержаться сильнее при экономии батареи. Пропуск сигналов это теперь " +
+                "не ломает, но вход всё равно случится позже, чем в прогоне.",
         )
         add(
             "Учтены комиссия и спред, но не проскальзывание, частичное исполнение и налог. " +

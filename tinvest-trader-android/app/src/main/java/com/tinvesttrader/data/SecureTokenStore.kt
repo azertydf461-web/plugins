@@ -54,6 +54,52 @@ class SecureTokenStore(context: Context) {
         get() = prefs.getString(KEY_FIGI_LABEL, null)
         set(value) = prefs.edit().putString(KEY_FIGI_LABEL, value).apply()
 
+    /**
+     * Таймфрейм свечей. По умолчанию он совпадает с периодом пробуждения
+     * бота: если брать свечи мельче, чем частота проверок, бот физически не
+     * увидит часть пересечений — они случатся на свечах, до которых он ни
+     * разу не доберётся.
+     */
+    var candleInterval: String
+        get() = prefs.getString(KEY_INTERVAL, DEFAULT_INTERVAL) ?: DEFAULT_INTERVAL
+        set(value) = prefs.edit().putString(KEY_INTERVAL, value).apply()
+
+    /** "PERCENT" — фиксированный процент, "ATR" — от волатильности бумаги. */
+    var stopMode: String
+        get() = prefs.getString(KEY_STOP_MODE, DEFAULT_STOP_MODE) ?: DEFAULT_STOP_MODE
+        set(value) = prefs.edit().putString(KEY_STOP_MODE, value).apply()
+
+    var stopLossPercent: Double
+        get() = prefs.getString(KEY_STOP_PERCENT, null)?.toDoubleOrNull() ?: 3.0
+        set(value) = prefs.edit().putString(KEY_STOP_PERCENT, value.toString()).apply()
+
+    var atrMultiplier: Double
+        get() = prefs.getString(KEY_ATR_MULTIPLIER, null)?.toDoubleOrNull() ?: 2.0
+        set(value) = prefs.edit().putString(KEY_ATR_MULTIPLIER, value.toString()).apply()
+
+    /** Ставить ли защитную стоп-заявку на стороне брокера после покупки. */
+    var protectiveStopEnabled: Boolean
+        get() = prefs.getBoolean(KEY_PROTECTIVE_STOP, true)
+        set(value) = prefs.edit().putBoolean(KEY_PROTECTIVE_STOP, value).apply()
+
+    /** Идентификатор выставленной стоп-заявки: по нему её потом снимают. */
+    var protectiveStopOrderId: String?
+        get() = prefs.getString(KEY_STOP_ORDER_ID, null)
+        set(value) = prefs.edit().putString(KEY_STOP_ORDER_ID, value).apply()
+
+    /** Цена выставленного стопа — порог для проверки в цикле бота. */
+    var protectiveStopPrice: Double
+        get() = prefs.getString(KEY_STOP_PRICE, null)?.toDoubleOrNull() ?: 0.0
+        set(value) = prefs.edit().putString(KEY_STOP_PRICE, value.toString()).apply()
+
+    /**
+     * Время последней разобранной свечи. По нему бот понимает, какой кусок
+     * истории он проспал, и досматривает пропущенные свечи на пересечения.
+     */
+    var lastProcessedCandleTime: String?
+        get() = prefs.getString(KEY_LAST_CANDLE, null)
+        set(value) = prefs.edit().putString(KEY_LAST_CANDLE, value).apply()
+
     private companion object {
         const val KEY_SANDBOX_TOKEN = "sandbox_token"
         const val KEY_LIVE_TOKEN = "live_token"
@@ -62,5 +108,15 @@ class SecureTokenStore(context: Context) {
         const val KEY_FIGI = "instrument_figi"
         const val KEY_ACCOUNT_LABEL = "account_label"
         const val KEY_FIGI_LABEL = "instrument_label"
+        const val KEY_INTERVAL = "candle_interval"
+        const val KEY_STOP_MODE = "stop_mode"
+        const val KEY_STOP_PERCENT = "stop_loss_percent"
+        const val KEY_ATR_MULTIPLIER = "atr_multiplier"
+        const val KEY_PROTECTIVE_STOP = "protective_stop_enabled"
+        const val KEY_STOP_ORDER_ID = "protective_stop_order_id"
+        const val KEY_STOP_PRICE = "protective_stop_price"
+        const val KEY_LAST_CANDLE = "last_processed_candle_time"
+        const val DEFAULT_INTERVAL = "CANDLE_INTERVAL_15_MIN"
+        const val DEFAULT_STOP_MODE = "ATR"
     }
 }

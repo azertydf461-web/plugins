@@ -38,6 +38,11 @@ data class SettingsUiState(
     val catalogBusy: Boolean = false,
     val diagnostics: List<DiagnosticStep> = emptyList(),
     val diagnosticsRunning: Boolean = false,
+    val candleInterval: String = "CANDLE_INTERVAL_15_MIN",
+    val stopMode: String = "ATR",
+    val stopLossPercent: Double = 3.0,
+    val atrMultiplier: Double = 2.0,
+    val protectiveStopEnabled: Boolean = true,
 )
 
 /**
@@ -71,7 +76,43 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             accountLabel = tokenStore.accountLabel,
             instrumentFigi = tokenStore.instrumentFigi,
             instrumentLabel = tokenStore.instrumentLabel,
+            candleInterval = tokenStore.candleInterval,
+            stopMode = tokenStore.stopMode,
+            stopLossPercent = tokenStore.stopLossPercent,
+            atrMultiplier = tokenStore.atrMultiplier,
+            protectiveStopEnabled = tokenStore.protectiveStopEnabled,
         )
+    }
+
+    /**
+     * Таймфрейм свечей должен быть не мельче периода пробуждения бота,
+     * иначе часть свечей он просто не увидит. Смена таймфрейма сбрасывает
+     * отметку последней разобранной свечи: старая относится к другой сетке.
+     */
+    fun setCandleInterval(interval: String) {
+        tokenStore.candleInterval = interval
+        tokenStore.lastProcessedCandleTime = null
+        reload()
+    }
+
+    fun setStopMode(mode: String) {
+        tokenStore.stopMode = mode
+        reload()
+    }
+
+    fun setStopLossPercent(value: Double) {
+        tokenStore.stopLossPercent = value
+        reload()
+    }
+
+    fun setAtrMultiplier(value: Double) {
+        tokenStore.atrMultiplier = value
+        reload()
+    }
+
+    fun setProtectiveStopEnabled(enabled: Boolean) {
+        tokenStore.protectiveStopEnabled = enabled
+        reload()
     }
 
     fun saveSandboxToken(token: String) {

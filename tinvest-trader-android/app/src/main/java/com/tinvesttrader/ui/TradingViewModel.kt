@@ -174,7 +174,7 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
             val engine = TradingEngine(
                 repository = repository,
                 strategy = SmaCrossoverStrategy(),
-                riskManager = RiskManagerHolder.getOrCreate(),
+                riskManager = RiskManagerHolder.configure(RiskManagerHolder.limitsFrom(tokenStore)),
                 tokenStore = tokenStore,
                 journal = journal,
             )

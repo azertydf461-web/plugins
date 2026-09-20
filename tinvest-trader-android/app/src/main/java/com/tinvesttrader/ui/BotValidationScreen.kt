@@ -138,6 +138,7 @@ fun BotValidationScreen(
             backtest.result?.let { result ->
                 item { BacktestSummaryCard(result) }
                 item { BacktestNumbersCard(result) }
+                item { ComparisonCard(result) }
                 item { CaveatsCard(result) }
                 if (result.trades.isNotEmpty()) {
                     item {
@@ -290,11 +291,81 @@ private fun BacktestNumbersCard(result: BotBacktestResult) {
             StatRow("Издержки на сделку", percent(result.costPerTradePercent))
             if (result.tradeCountIfPolledEveryBar != result.tradeCount) {
                 StatRow(
-                    "Сделок при проверке каждой свечи",
+                    "Сделок при непрерывном наблюдении",
                     result.tradeCountIfPolledEveryBar.toString(),
-                    WARNING_COLOR,
+                    MUTED_COLOR,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Сравнение с прежним поведением на тех же свечах: слепой к пропускам бот с
+ * мягким стопом в фиксированные 3%. Без этой колонки «стало лучше» пришлось
+ * бы принимать на веру.
+ */
+@Composable
+private fun ComparisonCard(result: BotBacktestResult) {
+    val betterExpectancy = result.expectancyPercent - result.legacyExpectancyPercent
+    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Что дали правки", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Слева — как бот работает сейчас: досматривает пропущенные свечи, " +
+                    "стоп-заявка у брокера, расстояние от волатильности. Справа — как " +
+                    "было: только последняя свеча и мягкий стоп в 3%.",
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            ComparisonRow("Сделок", result.tradeCount.toString(), result.legacyTradeCount.toString())
+            ComparisonRow(
+                "Средняя сделка",
+                percent(result.expectancyPercent),
+                percent(result.legacyExpectancyPercent),
+            )
+            ComparisonRow(
+                "Итог",
+                percent(result.totalReturnPercent),
+                percent(result.legacyTotalReturnPercent),
+            )
+            ComparisonRow(
+                "Худшая сделка",
+                percent(result.worstTradePercent),
+                percent(result.legacyWorstTradePercent),
+            )
+            Text(
+                when {
+                    betterExpectancy > 0.05 ->
+                        "Правки улучшили среднюю сделку на ${percent(betterExpectancy)}."
+                    betterExpectancy < -0.05 ->
+                        "На этой бумаге правки среднюю сделку ухудшили на " +
+                            "${percent(-betterExpectancy)} — значит, прежние пропуски случайно " +
+                            "уберегали от части убыточных входов, а не помогали."
+                    else -> "На этой бумаге правки почти не изменили результат."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (betterExpectancy >= 0) GOOD_COLOR else WARNING_COLOR,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComparisonRow(label: String, now: String, before: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall)
+        Row {
+            Text(now, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+            Text(
+                "  было $before",
+                style = MaterialTheme.typography.bodySmall,
+                color = MUTED_COLOR,
+            )
         }
     }
 }

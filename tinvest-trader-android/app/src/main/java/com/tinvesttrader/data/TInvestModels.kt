@@ -70,6 +70,50 @@ data class PostOrderResponse(
     val lotsExecuted: Long = 0,
 )
 
+// --- Стоп-заявки на стороне брокера -----------------------------------
+// Обычная заявка (PostOrder) исполняется сразу; стоп-заявка живёт на сервере
+// брокера и срабатывает без участия приложения — именно это и нужно, чтобы
+// стоп-лосс работал, пока телефон спит.
+
+@Serializable
+data class PostStopOrderRequest(
+    val instrumentId: String,
+    val quantity: String,
+    /** Цена срабатывания. По достижении брокер выставляет заявку сам. */
+    val stopPrice: Quotation,
+    val direction: String, // STOP_ORDER_DIRECTION_SELL
+    val accountId: String,
+    val expirationType: String, // STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL
+    val stopOrderType: String, // STOP_ORDER_TYPE_STOP_LOSS
+)
+
+@Serializable
+data class PostStopOrderResponse(val stopOrderId: String = "")
+
+@Serializable
+data class GetStopOrdersRequest(val accountId: String)
+
+@Serializable
+data class StopOrder(
+    val stopOrderId: String = "",
+    val figi: String = "",
+    val lotsRequested: String = "0",
+    val stopPrice: MoneyValue? = null,
+    val direction: String = "",
+)
+
+@Serializable
+data class GetStopOrdersResponse(val stopOrders: List<StopOrder> = emptyList())
+
+@Serializable
+data class CancelStopOrderRequest(
+    val accountId: String,
+    val stopOrderId: String,
+)
+
+@Serializable
+data class CancelStopOrderResponse(val time: String = "")
+
 @Serializable
 data class Position(
     val figi: String,
