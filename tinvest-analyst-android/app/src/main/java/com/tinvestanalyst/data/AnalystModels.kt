@@ -4,7 +4,17 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class Quotation(val units: String = "0", val nano: Int = 0) {
-    fun toDouble(): Double = units.toDouble() + nano / 1_000_000_000.0
+    fun toDouble(): Double = (units.toDoubleOrNull() ?: 0.0) + nano / 1_000_000_000.0
+}
+
+/** Денежная величина: то же число, что Quotation, но с валютой. */
+@Serializable
+data class MoneyValue(
+    val currency: String = "rub",
+    val units: String = "0",
+    val nano: Int = 0,
+) {
+    fun toDouble(): Double = (units.toDoubleOrNull() ?: 0.0) + nano / 1_000_000_000.0
 }
 
 @Serializable
