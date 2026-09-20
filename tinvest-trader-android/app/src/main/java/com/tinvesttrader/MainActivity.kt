@@ -11,10 +11,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.tinvesttrader.ui.BotValidationScreen
 import com.tinvesttrader.ui.DashboardScreen
 import com.tinvesttrader.ui.SettingsScreen
 
-private enum class Screen { DASHBOARD, SETTINGS }
+private enum class Screen { DASHBOARD, SETTINGS, VALIDATION }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,7 +34,11 @@ class MainActivity : ComponentActivity() {
 private fun AppRoot() {
     var screen by remember { mutableStateOf(Screen.DASHBOARD) }
     when (screen) {
-        Screen.DASHBOARD -> DashboardScreen(onOpenSettings = { screen = Screen.SETTINGS })
+        Screen.DASHBOARD -> DashboardScreen(
+            onOpenSettings = { screen = Screen.SETTINGS },
+            onOpenValidation = { screen = Screen.VALIDATION },
+        )
         Screen.SETTINGS -> SettingsScreen(onBack = { screen = Screen.DASHBOARD })
+        Screen.VALIDATION -> BotValidationScreen(onBack = { screen = Screen.DASHBOARD })
     }
 }

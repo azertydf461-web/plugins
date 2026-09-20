@@ -7,14 +7,21 @@ import com.tinvesttrader.data.SecureTokenStore
 import com.tinvesttrader.data.TInvestRepository
 import com.tinvesttrader.trading.DecisionJournal
 import com.tinvesttrader.trading.DecisionRecord
+import com.tinvesttrader.trading.BotBacktestResult
+import com.tinvesttrader.trading.BotBacktestSettings
+import com.tinvesttrader.trading.LedgerStats
 import com.tinvesttrader.trading.RiskManagerHolder
+import com.tinvesttrader.trading.StrategyBacktest
+import com.tinvesttrader.trading.TradeLedger
 import com.tinvesttrader.trading.SmaCrossoverStrategy
 import com.tinvesttrader.trading.TradingEngine
 import com.tinvesttrader.trading.TradingWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class DashboardUiState(
     val botEnabled: Boolean = false,
@@ -28,6 +35,30 @@ data class DashboardUiState(
     val checkInProgress: Boolean = false,
 )
 
+/**
+ * Периоды прогона. Первый повторяет то, как бот работает сейчас: свечи по
+ * пять минут, а проверка рынка раз в пятнадцать — то есть каждая третья
+ * свеча. Остальные показывают, что было бы на других таймфреймах.
+ */
+enum class BotBacktestRange(
+    val title: String,
+    val interval: String,
+    val days: Long,
+    val pollEveryNBars: Int,
+) {
+    LIVE_LIKE("Как сейчас: 5 мин, 14 дней", "CANDLE_INTERVAL_5_MIN", 14, 3),
+    FIFTEEN_MIN("15 мин, 30 дней", "CANDLE_INTERVAL_15_MIN", 30, 1),
+    HOUR("Часовые, 6 месяцев", "CANDLE_INTERVAL_HOUR", 180, 1),
+}
+
+data class BotBacktestUiState(
+    val range: BotBacktestRange = BotBacktestRange.LIVE_LIKE,
+    val running: Boolean = false,
+    val stage: String? = null,
+    val result: BotBacktestResult? = null,
+    val error: String? = null,
+)
+
 class TradingViewModel(application: Application) : AndroidViewModel(application) {
 
     private val tokenStore = SecureTokenStore(application)
@@ -38,6 +69,73 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
     val uiState: StateFlow<DashboardUiState> = _uiState.asStateFlow()
 
     val decisions: StateFlow<List<DecisionRecord>> = journal.records
+
+    private val _backtest = MutableStateFlow(BotBacktestUiState())
+    val backtest: StateFlow<BotBacktestUiState> = _backtest.asStateFlow()
+
+    /** Итог реальной работы бота: собирается из журнала, отдельного хранилища не нужно. */
+    fun ledgerStats(): LedgerStats = TradeLedger.stats(journal.records.value)
+
+    fun closedTrades() = TradeLedger.closedTrades(journal.records.value)
+
+    fun setBacktestRange(range: BotBacktestRange) {
+        _backtest.value = _backtest.value.copy(range = range, result = null, error = null)
+    }
+
+    /**
+     * Прогоняет по истории ту же стратегию и то же правило стоп-лосса,
+     * которыми бот торгует вживую. Отдельной «модельной» копии логики нет
+     * намеренно: иначе проверялась бы не та программа, что выставляет ордера.
+     */
+    fun runBacktest() {
+        if (_backtest.value.running) return
+        val figi = tokenStore.instrumentFigi
+        if (figi.isNullOrBlank()) {
+            _backtest.value = _backtest.value.copy(
+                error = "Сначала выберите инструмент в настройках — прогонять нечего.",
+            )
+            return
+        }
+        viewModelScope.launch {
+            val range = _backtest.value.range
+            _backtest.value = _backtest.value.copy(
+                running = true,
+                error = null,
+                result = null,
+                stage = "Загружаю историю...",
+            )
+            runCatching {
+                val candles = repository.getHistory(figi, range.interval, range.days)
+                _backtest.value = _backtest.value.copy(stage = "Прогоняю ${candles.size} свечей...")
+                withContext(Dispatchers.Default) {
+                    StrategyBacktest.run(
+                        strategy = SmaCrossoverStrategy(),
+                        intervalTitle = range.title,
+                        candles = candles,
+                        settings = BotBacktestSettings(pollEveryNBars = range.pollEveryNBars),
+                    )
+                } to candles.size
+            }.onSuccess { (result, bars) ->
+                _backtest.value = _backtest.value.copy(
+                    running = false,
+                    stage = null,
+                    result = result,
+                    error = if (result == null) {
+                        "Истории не хватило: получено $bars свечей. Биржа могла не отдать данные " +
+                            "за выбранный период — попробуйте другой."
+                    } else {
+                        null
+                    },
+                )
+            }.onFailure { error ->
+                _backtest.value = _backtest.value.copy(
+                    running = false,
+                    stage = null,
+                    error = error.message ?: "Не удалось загрузить историю.",
+                )
+            }
+        }
+    }
 
     init {
         refreshFromStore()

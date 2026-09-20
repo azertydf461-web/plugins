@@ -48,6 +48,7 @@ private val WARN_COLOR = Color(0xFFE65100)
 fun DashboardScreen(
     viewModel: TradingViewModel = viewModel(),
     onOpenSettings: () -> Unit,
+    onOpenValidation: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsState()
     val decisions by viewModel.decisions.collectAsState()
@@ -119,6 +120,7 @@ fun DashboardScreen(
                             modifier = Modifier.padding(start = 8.dp),
                         ) { Text("Настройки") }
                     }
+                    OutlinedButton(onClick = onOpenValidation) { Text("Проверка бота") }
                     state.statusMessage?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall)
                     }

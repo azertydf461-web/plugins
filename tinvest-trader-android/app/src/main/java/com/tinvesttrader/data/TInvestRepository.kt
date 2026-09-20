@@ -13,6 +13,9 @@ import java.util.concurrent.ConcurrentHashMap
 private const val LIVE_BASE_URL = "https://invest-public-api.tbank.ru/rest/"
 private const val SANDBOX_BASE_URL = "https://sandbox-invest-public-api.tbank.ru/rest/"
 
+/** Потолок числа запросов на один прогон истории — защита от лимитов API. */
+private const val MAX_HISTORY_CHUNKS = 16
+
 class TInvestRepository(private val tokenStore: SecureTokenStore) {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -118,6 +121,49 @@ class TInvestRepository(private val tokenStore: SecureTokenStore) {
                 interval = interval,
             ),
         ).candles
+    }
+
+    /**
+     * Длинная история для прогона стратегии. API ограничивает длину одного
+     * запроса свечей, поэтому период режется на куски: иначе двухнедельный
+     * запрос пятиминутных свечей просто вернёт ошибку. Не отдавшийся кусок
+     * пропускается — проверка на неполной истории полезнее, чем никакой.
+     *
+     * История всегда берётся из боевого контура: в песочнице своей рыночной
+     * истории нет, а проверять стратегию надо на настоящих ценах.
+     */
+    suspend fun getHistory(figi: String, interval: String, daysBack: Long): List<Candle> {
+        val chunkDays = when (interval) {
+            "CANDLE_INTERVAL_DAY" -> 360L
+            "CANDLE_INTERVAL_HOUR" -> 30L
+            "CANDLE_INTERVAL_15_MIN" -> 3L
+            else -> 1L
+        }
+        val token = tokenStore.liveToken?.takeIf { it.isNotBlank() }
+            ?.let { "Bearer $it" }
+            ?: currentToken()
+        val api = if (tokenStore.liveToken.isNullOrBlank()) currentApi() else liveApi
+
+        val to = Instant.now()
+        val collected = mutableListOf<Candle>()
+        var offset = daysBack
+        var guard = 0
+        while (offset > 0 && guard < MAX_HISTORY_CHUNKS) {
+            val chunkFrom = to.minusSeconds(offset * 86_400)
+            val chunkTo = to.minusSeconds((offset - minOf(offset, chunkDays)) * 86_400)
+            runCatching {
+                api.getCandles(
+                    token,
+                    GetCandlesRequest(figi, chunkFrom.toString(), chunkTo.toString(), interval),
+                ).candles
+            }.onSuccess { collected += it }
+            offset -= chunkDays
+            guard++
+        }
+        return collected
+            .filter { it.close.toDouble() > 0 }
+            .distinctBy { it.time }
+            .sortedBy { it.time }
     }
 
     suspend fun placeOrder(
