@@ -12,6 +12,9 @@ import java.util.concurrent.TimeUnit
 
 private const val BASE_URL = "https://invest-public-api.tbank.ru/rest/"
 
+/** Потолок числа запросов на один прогон истории — защита от лимитов API. */
+private const val MAX_HISTORY_CHUNKS = 14
+
 class AnalystRepository(private val settings: AnalystSettingsStore) {
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -89,6 +92,40 @@ class AnalystRepository(private val settings: AnalystSettingsStore) {
             auth(),
             GetCandlesRequest(figi, from.toString(), to.toString(), interval),
         ).candles.takeLast(barsWanted)
+    }
+
+    /**
+     * Длинная история для бэктеста. API ограничивает длину одного запроса по
+     * свечам, поэтому период режется на куски и склеивается: иначе трёхлетний
+     * запрос просто вернёт ошибку. Кусок, который не отдался, пропускается —
+     * лучше проверка на неполной истории, чем никакой.
+     */
+    suspend fun loadHistory(figi: String, interval: String, daysBack: Long): List<Candle> {
+        val chunkDays = when (interval) {
+            "CANDLE_INTERVAL_DAY" -> 360L
+            "CANDLE_INTERVAL_HOUR" -> 30L
+            else -> 5L
+        }
+        val to = Instant.now()
+        val collected = mutableListOf<Candle>()
+        var offset = daysBack
+        var guard = 0
+        while (offset > 0 && guard < MAX_HISTORY_CHUNKS) {
+            val chunkTo = to.minus(offset - minOf(offset, chunkDays), ChronoUnit.DAYS)
+            val chunkFrom = to.minus(offset, ChronoUnit.DAYS)
+            runCatching {
+                api.getCandles(
+                    auth(),
+                    GetCandlesRequest(figi, chunkFrom.toString(), chunkTo.toString(), interval),
+                ).candles
+            }.onSuccess { collected += it }
+            offset -= chunkDays
+            guard++
+        }
+        return collected
+            .filter { it.close.toDouble() > 0 }
+            .distinctBy { it.time }
+            .sortedBy { it.time }
     }
 
     /** Один запрос на весь список наблюдения — так не упираемся в лимиты API. */

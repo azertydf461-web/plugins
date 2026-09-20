@@ -26,12 +26,14 @@ import com.tinvestanalyst.ui.AnalystViewModel
 import com.tinvestanalyst.ui.IdeasScreen
 import com.tinvestanalyst.ui.InstrumentCatalogScreen
 import com.tinvestanalyst.ui.InstrumentDetailScreen
+import com.tinvestanalyst.ui.ValidationScreen
 import com.tinvestanalyst.ui.WatchlistScreen
 
 private enum class Tab(val title: String, val icon: String) {
     IDEAS("Идеи", "★"),
     OVERVIEW("Обзор", "◆"),
     CATALOG("Каталог", "☰"),
+    VALIDATION("Проверка", "✓"),
     SETTINGS("Настройки", "⚙"),
 }
 
@@ -82,6 +84,7 @@ private fun AnalystApp() {
                             Tab.IDEAS -> "Идеи рынка"
                             Tab.OVERVIEW -> "Наблюдение"
                             Tab.CATALOG -> "Каталог активов"
+                            Tab.VALIDATION -> "Проверка приложения"
                             Tab.SETTINGS -> "Настройки"
                         },
                     )
@@ -127,6 +130,8 @@ private fun AnalystApp() {
                 )
 
                 Tab.CATALOG -> InstrumentCatalogScreen(viewModel = viewModel)
+
+                Tab.VALIDATION -> ValidationScreen(viewModel = viewModel)
 
                 Tab.SETTINGS -> AnalystSettingsScreen(viewModel = viewModel)
             }

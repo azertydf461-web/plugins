@@ -128,14 +128,7 @@ object MarketAnalyzer {
             )
         }
 
-        val technicalFactors = buildList {
-            add(trendFactor(closes))
-            add(longTrendFactor(closes, lastPrice))
-            rsiFactor(closes)?.let(::add)
-            macdFactor(closes)?.let(::add)
-            bollingerFactor(closes, lastPrice)?.let(::add)
-            volumeFactor(candles, closes)?.let(::add)
-        }
+        val technicalFactors = technicalFactors(candles)
         val fundamentalFactors = FundamentalAnalyzer.analyze(fundamental)
         val dividendFactors = listOfNotNull(DividendAnalyzer.analyze(dividends, fundamental))
         val newsAssessment = NewsAnalyzer.assess(instrument, news)
@@ -195,6 +188,37 @@ object MarketAnalyzer {
     }
 
     // --- Технические факторы ----------------------------------------------
+
+    /** Минимум свечей, при котором технический блок вообще считается. */
+    const val MIN_BARS = SLOW_PERIOD + 2
+
+    /**
+     * Технический блок вынесен отдельно, потому что его считает не только
+     * разбор бумаги, но и бэктест — прогоняя ту же самую логику по каждой
+     * исторической свече. Две копии правил разошлись бы, и проверка перестала
+     * бы проверять то, что показывается пользователю.
+     */
+    fun technicalFactors(candles: List<Candle>): List<AnalysisFactor> {
+        val closes = candles.map { it.close.toDouble() }
+        if (closes.size < MIN_BARS) return emptyList()
+        val lastPrice = closes.last()
+        return buildList {
+            add(trendFactor(closes))
+            add(longTrendFactor(closes, lastPrice))
+            rsiFactor(closes)?.let(::add)
+            macdFactor(closes)?.let(::add)
+            bollingerFactor(closes, lastPrice)?.let(::add)
+            volumeFactor(candles, closes)?.let(::add)
+        }
+    }
+
+    /** Тот же блок, приведённый к [-1; 1] — в этом виде его использует бэктест. */
+    fun technicalScore(candles: List<Candle>): Double? {
+        val factors = technicalFactors(candles)
+        if (factors.isEmpty()) return null
+        val max = factors.sumOf { it.weight }
+        return if (max == 0) null else factors.sumOf { it.score }.toDouble() / max
+    }
 
     private fun trendFactor(closes: List<Double>): AnalysisFactor {
         val fast = Indicators.sma(closes, FAST_PERIOD) ?: 0.0

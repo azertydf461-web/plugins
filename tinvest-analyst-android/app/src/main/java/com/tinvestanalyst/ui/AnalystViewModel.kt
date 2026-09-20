@@ -5,8 +5,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tinvestanalyst.analysis.Horizon
 import com.tinvestanalyst.analysis.MarketAnalysis
+import com.tinvestanalyst.analysis.BacktestEngine
+import com.tinvestanalyst.analysis.BacktestResult
 import com.tinvestanalyst.analysis.MarketAnalyzer
 import com.tinvestanalyst.analysis.RiskProfile
+import com.tinvestanalyst.analysis.Verdict
 import com.tinvestanalyst.data.AnalystRepository
 import com.tinvestanalyst.data.AnalystSettingsStore
 import com.tinvestanalyst.data.AssetFundamental
@@ -16,8 +19,11 @@ import com.tinvestanalyst.data.Instrument
 import com.tinvestanalyst.data.NetworkDiagnostics
 import com.tinvestanalyst.data.NewsItem
 import com.tinvestanalyst.data.NewsRepository
+import com.tinvestanalyst.data.RecommendationJournal
+import com.tinvestanalyst.data.RecommendationRecord
 import com.tinvestanalyst.data.InstrumentCategory
 import com.tinvestanalyst.data.WatchedInstrument
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +31,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class WatchRow(
     val instrument: WatchedInstrument,
@@ -62,6 +69,22 @@ data class DetailUiState(
     val tradingStatus: String? = null,
 )
 
+/** Историческая глубина прогона: больше — надёжнее статистика, дольше загрузка. */
+enum class BacktestRange(val title: String, val interval: String, val days: Long) {
+    DAY_3Y("Дневные, 3 года", "CANDLE_INTERVAL_DAY", 1080),
+    DAY_1Y("Дневные, 1 год", "CANDLE_INTERVAL_DAY", 360),
+    HOUR_4M("Часовые, 4 месяца", "CANDLE_INTERVAL_HOUR", 120),
+}
+
+data class BacktestUiState(
+    val figi: String? = null,
+    val range: BacktestRange = BacktestRange.DAY_3Y,
+    val running: Boolean = false,
+    val result: BacktestResult? = null,
+    val error: String? = null,
+    val stage: String? = null,
+)
+
 data class SearchUiState(
     val query: String = "",
     val results: List<Instrument> = emptyList(),
@@ -88,6 +111,12 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
     private val settings = AnalystSettingsStore(application)
     private val repository = AnalystRepository(settings)
     private val newsRepository = NewsRepository()
+    private val journal = RecommendationJournal.get(application)
+
+    val journalRecords: StateFlow<List<RecommendationRecord>> = journal.records
+
+    private val _backtest = MutableStateFlow(BacktestUiState())
+    val backtest: StateFlow<BacktestUiState> = _backtest.asStateFlow()
 
     private val _uiState = MutableStateFlow(AnalystUiState())
     val uiState: StateFlow<AnalystUiState> = _uiState.asStateFlow()
@@ -166,6 +195,7 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
                 _uiState.value = _uiState.value.copy(progress = (index + 1) to rows.size)
             }
 
+            recordRecommendations(updated)
             _uiState.value = _uiState.value.copy(
                 rows = updated,
                 isRefreshing = false,
@@ -234,6 +264,7 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
                 if (figis.isNotEmpty() && _uiState.value.hasToken) {
                     runCatching { repository.loadLastPrices(figis) }
                         .onSuccess { prices ->
+                            journal.updateOutcomes(prices)
                             _uiState.value = _uiState.value.copy(
                                 rows = _uiState.value.rows.map { row ->
                                     prices[row.instrument.figi]?.let { row.copy(lastPrice = it) } ?: row
@@ -463,6 +494,113 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
                 isRefreshing = false,
                 lastUpdateMillis = System.currentTimeMillis(),
             )
+        }
+    }
+
+    /**
+     * В журнал попадают только действенные вердикты: «держать» — это не
+     * рекомендация, и её учёт раздул бы статистику безобидными записями,
+     * скрыв качество настоящих советов.
+     */
+    private fun recordRecommendations(rows: List<WatchRow>) {
+        val horizon = settings.horizon
+        rows.forEach { row ->
+            val analysis = row.analysis ?: return@forEach
+            if (analysis.verdict == Verdict.HOLD || analysis.lastPrice <= 0) return@forEach
+            val plan = analysis.positionPlan
+            journal.record(
+                RecommendationRecord(
+                    id = "${row.instrument.figi}-${System.currentTimeMillis()}",
+                    figi = row.instrument.figi,
+                    ticker = row.instrument.ticker,
+                    name = row.instrument.name,
+                    verdict = analysis.verdict.name,
+                    verdictLabel = analysis.verdict.label,
+                    score = analysis.weightedScore,
+                    confidence = analysis.confidencePercent,
+                    horizon = horizon,
+                    priceAtIssue = analysis.lastPrice,
+                    stopPrice = plan?.stopPrice,
+                    targetPrice = plan?.targetPrice,
+                    createdAtMillis = System.currentTimeMillis(),
+                    lastPrice = analysis.lastPrice,
+                    maxPriceSeen = analysis.lastPrice,
+                    minPriceSeen = analysis.lastPrice,
+                ),
+            )
+        }
+    }
+
+    fun journalStats() = journal.stats()
+
+    fun clearJournal() = journal.clear()
+
+    fun selectBacktestInstrument(figi: String) {
+        _backtest.value = _backtest.value.copy(figi = figi, result = null, error = null)
+    }
+
+    fun setBacktestRange(range: BacktestRange) {
+        _backtest.value = _backtest.value.copy(range = range, result = null, error = null)
+    }
+
+    /**
+     * Прогон идёт в фоне и может занять до минуты: история качается кусками,
+     * а индикаторы пересчитываются на каждой свече заново — так прогон видит
+     * ровно то же, что видел бы пользователь в тот день, без заглядывания
+     * вперёд.
+     */
+    fun runBacktest() {
+        val state = _backtest.value
+        if (state.running) return
+        val figi = state.figi ?: _uiState.value.rows.firstOrNull()?.instrument?.figi
+        val instrument = _uiState.value.rows.firstOrNull { it.instrument.figi == figi }?.instrument
+        if (instrument == null) {
+            _backtest.value = state.copy(error = "Сначала добавьте бумагу в список наблюдения.")
+            return
+        }
+        viewModelScope.launch {
+            _backtest.value = _backtest.value.copy(
+                figi = instrument.figi,
+                running = true,
+                error = null,
+                result = null,
+                stage = "Загружаю историю...",
+            )
+            runCatching {
+                val candles = repository.loadHistory(
+                    instrument.figi,
+                    _backtest.value.range.interval,
+                    _backtest.value.range.days,
+                )
+                _backtest.value = _backtest.value.copy(stage = "Прогоняю ${candles.size} свечей...")
+                // Пересчёт индикаторов на каждой свече — тяжёлая арифметика,
+                // на главном потоке она подвесила бы интерфейс.
+                withContext(Dispatchers.Default) {
+                    BacktestEngine.run(
+                        ticker = instrument.ticker,
+                        intervalTitle = _backtest.value.range.title,
+                        candles = candles,
+                    )
+                } to candles.size
+            }.onSuccess { (result, bars) ->
+                _backtest.value = _backtest.value.copy(
+                    running = false,
+                    result = result,
+                    stage = null,
+                    error = if (result == null) {
+                        "Истории не хватило: получено $bars свечей. Биржа могла не отдать " +
+                            "данные за выбранный период — попробуйте другой диапазон."
+                    } else {
+                        null
+                    },
+                )
+            }.onFailure { error ->
+                _backtest.value = _backtest.value.copy(
+                    running = false,
+                    stage = null,
+                    error = error.message ?: "Не удалось загрузить историю.",
+                )
+            }
         }
     }
 
