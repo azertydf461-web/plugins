@@ -10,6 +10,7 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="T-Invest Trader"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.TInvestTrader"
         android:usesCleartextTraffic="false">
 

@@ -94,9 +94,36 @@ class NetworkDiagnostics(private val tokenStore: SecureTokenStore) {
                 title = "Соединение с сервером брокера",
                 status = CheckStatus.FAIL,
                 detail = "Соединение не установилось: ${error.message}",
-                hint = "Интернет есть, но до сервера брокера не достучаться. Чаще всего виноват VPN: " +
-                    "T-Invest не всегда пускает запросы с иностранных IP. Отключите VPN и повторите.",
+                hint = hintForConnectionError(error),
             )
+        }
+    }
+
+    /**
+     * Т-Банк выпускает сертификаты в российском УЦ Минцифры, которого нет в
+     * хранилище Android. Это выглядит как «нет связи», хотя сеть в порядке, —
+     * и лечится установкой корневого сертификата, а не отключением VPN.
+     */
+    private fun hintForConnectionError(error: Throwable): String {
+        val text = generateSequence(error) { it.cause }
+            .mapNotNull { "${it::class.java.simpleName} ${it.message}" }
+            .joinToString(" | ")
+
+        val certificateProblem = text.contains("Trust anchor", ignoreCase = true) ||
+            text.contains("CertPathValidator", ignoreCase = true) ||
+            text.contains("CertificateException", ignoreCase = true) ||
+            text.contains("SSLHandshake", ignoreCase = true)
+
+        return if (certificateProblem) {
+            "Сеть работает, но телефон не доверяет сертификату сервера. Т-Банк использует " +
+                "сертификат российского УЦ Минцифры, которого нет в Android по умолчанию.\n\n" +
+                "Что сделать: скачайте корневой сертификат с gosuslugi.ru/crt, затем " +
+                "Настройки телефона → Пароли и безопасность → Шифрование и учётные данные → " +
+                "Установить сертификат → Сертификат CA → выберите скачанный файл.\n\n" +
+                "Приложение доверяет таким сертификатам только для доменов Т-Банка."
+        } else {
+            "Интернет есть, но до сервера брокера не достучаться. Частая причина — VPN: " +
+                "T-Invest не всегда пускает запросы с иностранных IP. Отключите VPN и повторите."
         }
     }
 

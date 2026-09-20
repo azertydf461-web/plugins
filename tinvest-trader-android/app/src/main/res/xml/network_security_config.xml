@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Серверы Т-Банка используют сертификаты российского УЦ Минцифры, которого нет
+  в хранилище Android — отсюда "Trust anchor for certification path not found".
+  Пользователь ставит этот корневой сертификат на телефон сам, а приложение
+  доверяет пользовательским сертификатам ТОЛЬКО для доменов брокера: для всего
+  остального интернета остаётся обычная системная проверка.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">tbank.ru</domain>
+        <domain includeSubdomains="true">tinkoff.ru</domain>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>
