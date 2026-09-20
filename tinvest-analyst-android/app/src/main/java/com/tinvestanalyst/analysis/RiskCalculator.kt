@@ -10,10 +10,21 @@ data class RiskProfile(
     val horizon: Horizon,
 )
 
-enum class Horizon(val title: String, val technicalWeight: Double, val fundamentalWeight: Double, val dividendWeight: Double) {
-    SPECULATIVE("Спекулятивный (дни)", 0.70, 0.20, 0.10),
-    SWING("Среднесрочный (недели)", 0.45, 0.40, 0.15),
-    LONG("Долгосрочный (год+)", 0.20, 0.55, 0.25),
+/**
+ * Горизонт задаёт, что важнее в итоговом выводе. Новости весят заметно на
+ * днях и почти ничего не значат на годах: информационный повод отыгрывается
+ * рынком за часы, а бизнес эмитента — за кварталы.
+ */
+enum class Horizon(
+    val title: String,
+    val technicalWeight: Double,
+    val fundamentalWeight: Double,
+    val dividendWeight: Double,
+    val newsWeight: Double,
+) {
+    SPECULATIVE("Спекулятивный (дни)", 0.55, 0.15, 0.05, 0.25),
+    SWING("Среднесрочный (недели)", 0.38, 0.32, 0.12, 0.18),
+    LONG("Долгосрочный (год+)", 0.18, 0.47, 0.23, 0.12),
     ;
 
     companion object {

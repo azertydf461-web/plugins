@@ -4,6 +4,7 @@ import com.tinvestanalyst.data.AssetFundamental
 import com.tinvestanalyst.data.AssetReportEvent
 import com.tinvestanalyst.data.Candle
 import com.tinvestanalyst.data.Dividend
+import com.tinvestanalyst.data.NewsItem
 import com.tinvestanalyst.data.WatchedInstrument
 import kotlin.math.abs
 import kotlin.math.min
@@ -56,6 +57,8 @@ data class MarketAnalysis(
     val events: List<UpcomingEvent>,
     val positionPlan: PositionPlan?,
     val coverageNote: String,
+    val news: List<ScoredNews>,
+    val newsTone: Double?,
     val candles: List<Candle>,
     val fastSmaSeries: List<Double?>,
     val slowSmaSeries: List<Double?>,
@@ -73,9 +76,10 @@ data class MarketAnalysis(
  * поэтому один и тот же набор цифр даёт разные выводы спекулянту и
  * долгосрочному инвестору.
  *
- * Чего здесь принципиально нет — новостей: API брокера их не отдаёт, и
- * подменять их догадками нельзя. Событийный риск учитывается только по
- * датам, которые API действительно знает: отсечки и публикации отчётности.
+ * Четвёртый блок — новостной фон: брокерский API новостей не отдаёт, поэтому
+ * ленты читаются отдельно, а тональность считается по словарю. Она намеренно
+ * весит меньше цены и отчётности и всегда показывается вместе с исходными
+ * заголовками, чтобы вывод можно было перепроверить.
  */
 object MarketAnalyzer {
 
@@ -90,6 +94,7 @@ object MarketAnalyzer {
         dividends: List<Dividend> = emptyList(),
         reports: List<AssetReportEvent> = emptyList(),
         profile: RiskProfile? = null,
+        news: List<NewsItem> = emptyList(),
     ): MarketAnalysis {
         val closes = candles.map { it.close.toDouble() }
         val lastPrice = closes.lastOrNull() ?: 0.0
@@ -112,6 +117,8 @@ object MarketAnalyzer {
                 events = events,
                 positionPlan = null,
                 coverageNote = "Технический блок недоступен: мало свечей.",
+                news = emptyList(),
+                newsTone = null,
                 candles = candles,
                 fastSmaSeries = fastSmaSeries,
                 slowSmaSeries = slowSmaSeries,
@@ -131,11 +138,13 @@ object MarketAnalyzer {
         }
         val fundamentalFactors = FundamentalAnalyzer.analyze(fundamental)
         val dividendFactors = listOfNotNull(DividendAnalyzer.analyze(dividends, fundamental))
+        val newsAssessment = NewsAnalyzer.assess(instrument, news)
 
         val blocks = listOf(
             AnalysisBlock("Технический анализ", technicalFactors, horizon.technicalWeight),
             AnalysisBlock("Отчётность эмитента", fundamentalFactors, horizon.fundamentalWeight),
             AnalysisBlock("Дивиденды", dividendFactors, horizon.dividendWeight),
+            AnalysisBlock("Новостной фон", listOfNotNull(newsAssessment?.factor), horizon.newsWeight),
         )
 
         // Недоступный блок не обнуляет итог, а перераспределяет вес на
@@ -176,6 +185,8 @@ object MarketAnalyzer {
             events = events,
             positionPlan = plan,
             coverageNote = coverageNote(blocks),
+            news = newsAssessment?.items.orEmpty(),
+            newsTone = newsAssessment?.tone,
             candles = candles,
             fastSmaSeries = fastSmaSeries,
             slowSmaSeries = slowSmaSeries,
@@ -388,7 +399,7 @@ object MarketAnalyzer {
     private fun coverageNote(blocks: List<AnalysisBlock>): String {
         val missing = blocks.filterNot { it.available }.map { it.title.lowercase() }
         return if (missing.isEmpty()) {
-            "Учтены все блоки: техника, отчётность и дивиденды."
+            "Учтены все блоки: техника, отчётность, дивиденды и новости."
         } else {
             "Нет данных по блокам: ${missing.joinToString(", ")}. " +
                 "Вес перераспределён на остальные, вывод менее полный."

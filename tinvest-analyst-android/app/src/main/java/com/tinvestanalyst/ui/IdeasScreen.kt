@@ -61,6 +61,9 @@ fun IdeasScreen(viewModel: AnalystViewModel, onOpenInstrument: (String) -> Unit)
                         Text("обновлено ${formatClock(it)}", style = MaterialTheme.typography.labelSmall)
                     }
                 }
+                state.newsNote?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = HOLD_COLOR)
+                }
                 state.progress?.let { (done, total) ->
                     LinearProgressIndicator(
                         progress = { if (total == 0) 0f else done.toFloat() / total },

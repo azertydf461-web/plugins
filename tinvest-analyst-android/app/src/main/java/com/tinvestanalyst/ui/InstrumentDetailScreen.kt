@@ -23,7 +23,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.tinvestanalyst.analysis.AnalysisBlock
 import com.tinvestanalyst.analysis.AnalysisFactor
+import com.tinvestanalyst.analysis.NewsAnalyzer
 import com.tinvestanalyst.analysis.PositionPlan
+import com.tinvestanalyst.analysis.ScoredNews
 import com.tinvestanalyst.analysis.UpcomingEvent
 import com.tinvestanalyst.analysis.fmt
 
@@ -135,6 +137,10 @@ fun InstrumentDetailScreen(viewModel: AnalystViewModel, onBack: () -> Unit) {
                 )
             }
 
+            if (analysis.news.isNotEmpty()) {
+                item { NewsCard(analysis.news, analysis.newsTone) }
+            }
+
             analysis.blocks.forEach { block ->
                 item { BlockHeader(block) }
                 block.factors.forEach { factor ->
@@ -164,8 +170,9 @@ fun InstrumentDetailScreen(viewModel: AnalystViewModel, onBack: () -> Unit) {
 
             item {
                 Text(
-                    "Учтены цены, объёмы, отчётность эмитента, дивиденды и календарь событий. " +
-                        "Новостной фон не учитывается: брокерский API новостей не отдаёт. " +
+                    "Учтены цены, объёмы, отчётность эмитента, дивиденды, календарь событий " +
+                        "и новостной фон. Тональность новостей считается по финансовому словарю, " +
+                        "а не по смыслу текста, поэтому заголовки показаны отдельно — проверяйте их. " +
                         "Это не индивидуальная инвестиционная рекомендация — решение принимаете вы.",
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(bottom = 32.dp),
@@ -269,6 +276,77 @@ private fun EventsCard(events: List<UpcomingEvent>) {
             }
         }
     }
+}
+
+/**
+ * Заголовки, на которых построена оценка новостного фона. Показываются
+ * целиком и с собственной тональностью: вывод словаря должно быть можно
+ * проверить глазами, а не принимать на веру.
+ */
+@Composable
+private fun NewsCard(news: List<ScoredNews>, tone: Double?) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Новостной фон", style = MaterialTheme.typography.titleMedium)
+                tone?.let {
+                    Text(
+                        "позитив ${NewsAnalyzer.tonePercent(it)}%",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            it > 0.12 -> BUY_COLOR
+                            it < -0.12 -> SELL_COLOR
+                            else -> HOLD_COLOR
+                        },
+                    )
+                }
+            }
+
+            news.take(8).forEach { scored ->
+                val color = when {
+                    scored.sentiment > 0.05 -> BUY_COLOR
+                    scored.sentiment < -0.05 -> SELL_COLOR
+                    else -> HOLD_COLOR
+                }
+                Column(Modifier.padding(top = 10.dp)) {
+                    Text(
+                        scored.item.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        "${scored.item.source} · ${agoLabel(scored.hoursAgo)} · " +
+                            "оценка ${fmt(scored.sentiment)}" +
+                            if (scored.matchedWords.isEmpty()) {
+                                " (слов из словаря нет — нейтрально)"
+                            } else {
+                                " по словам: ${scored.matchedWords.joinToString(", ")}"
+                            },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = color,
+                    )
+                }
+            }
+
+            if (news.size > 8) {
+                Text(
+                    "...и ещё ${news.size - 8} публикаций учтены в оценке.",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+private fun agoLabel(hours: Int): String = when {
+    hours < 1 -> "только что"
+    hours < 24 -> "$hours ч назад"
+    else -> "${hours / 24} дн. назад"
 }
 
 @Composable

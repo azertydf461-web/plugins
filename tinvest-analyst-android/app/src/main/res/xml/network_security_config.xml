@@ -21,4 +21,19 @@
             <certificates src="user" />
         </trust-anchors>
     </domain-config>
+    <!--
+      Новостные ленты: часть российских изданий тоже отдаёт сертификаты
+      Минцифры. Доверие к пользовательским корневым сертификатам расширено
+      ровно на эти домены и не затрагивает остальной интернет.
+    -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">interfax.ru</domain>
+        <domain includeSubdomains="true">rbc.ru</domain>
+        <domain includeSubdomains="true">1prime.ru</domain>
+        <domain includeSubdomains="true">finam.ru</domain>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </domain-config>
 </network-security-config>

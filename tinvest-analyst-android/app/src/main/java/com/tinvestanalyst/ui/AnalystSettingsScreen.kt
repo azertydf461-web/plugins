@@ -21,6 +21,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -173,9 +174,42 @@ fun AnalystSettingsScreen(viewModel: AnalystViewModel) {
                 Text(
                     "Веса: техника ${(state.horizon.technicalWeight * 100).toInt()}%, " +
                         "отчётность ${(state.horizon.fundamentalWeight * 100).toInt()}%, " +
-                        "дивиденды ${(state.horizon.dividendWeight * 100).toInt()}%",
+                        "дивиденды ${(state.horizon.dividendWeight * 100).toInt()}%, " +
+                        "новости ${(state.horizon.newsWeight * 100).toInt()}%",
                     style = MaterialTheme.typography.labelSmall,
                 )
+            }
+        }
+
+        item {
+            Column(Modifier.padding(top = 16.dp)) {
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Учитывать новостной фон", style = MaterialTheme.typography.titleMedium)
+                    Switch(
+                        checked = state.newsEnabled,
+                        onCheckedChange = { viewModel.setNewsEnabled(it) },
+                    )
+                }
+                Text(
+                    "Приложение читает открытые ленты Интерфакса, РБК, Прайма и Финама, " +
+                        "находит публикации про выбранные бумаги и оценивает тональность " +
+                        "по финансовому словарю. Это оценка по словам заголовка, а не " +
+                        "понимание смысла: заголовки показываются в карточке бумаги, " +
+                        "проверяйте их сами. Выключите, если не нужен внешний трафик.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                state.newsNote?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = HOLD_COLOR,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
         }
 

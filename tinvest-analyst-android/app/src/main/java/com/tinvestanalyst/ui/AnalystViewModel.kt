@@ -14,6 +14,8 @@ import com.tinvestanalyst.data.CheckStatus
 import com.tinvestanalyst.data.DiagnosticStep
 import com.tinvestanalyst.data.Instrument
 import com.tinvestanalyst.data.NetworkDiagnostics
+import com.tinvestanalyst.data.NewsItem
+import com.tinvestanalyst.data.NewsRepository
 import com.tinvestanalyst.data.InstrumentCategory
 import com.tinvestanalyst.data.WatchedInstrument
 import kotlinx.coroutines.Job
@@ -42,6 +44,8 @@ data class AnalystUiState(
     val riskPerTradePercent: Double = 1.0,
     val maxLeverage: Double = 1.0,
     val horizon: Horizon = Horizon.SWING,
+    val newsEnabled: Boolean = true,
+    val newsNote: String? = null,
 ) {
     /** Идеи — те же бумаги, отсортированные по силе сигнала. */
     val rankedIdeas: List<WatchRow>
@@ -77,10 +81,13 @@ data class CatalogUiState(
     val addedFigis: Set<String> = emptySet(),
 )
 
+private val NEWS_SOURCE_COUNT = com.tinvestanalyst.data.NEWS_SOURCES.size
+
 class AnalystViewModel(application: Application) : AndroidViewModel(application) {
 
     private val settings = AnalystSettingsStore(application)
     private val repository = AnalystRepository(settings)
+    private val newsRepository = NewsRepository()
 
     private val _uiState = MutableStateFlow(AnalystUiState())
     val uiState: StateFlow<AnalystUiState> = _uiState.asStateFlow()
@@ -121,6 +128,7 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
             riskPerTradePercent = settings.riskPerTradePercent,
             maxLeverage = settings.maxLeverage,
             horizon = Horizon.fromKey(settings.horizon),
+            newsEnabled = settings.newsEnabled,
             rows = settings.watchlist.map { watched ->
                 _uiState.value.rows.firstOrNull { it.instrument.figi == watched.figi }
                     ?: WatchRow(watched)
@@ -141,12 +149,13 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
             val fundamentals = runCatching {
                 repository.loadFundamentals(rows.map { it.instrument.assetUid })
             }.getOrDefault(emptyMap())
+            val news = loadNews()
 
             val updated = mutableListOf<WatchRow>()
             var failure: String? = null
 
             rows.forEachIndexed { index, row ->
-                runCatching { analyzeRow(row, interval, profile, fundamentals[row.instrument.assetUid]) }
+                runCatching { analyzeRow(row, interval, profile, fundamentals[row.instrument.assetUid], news) }
                     .onSuccess { analysis ->
                         updated += row.copy(analysis = analysis, lastPrice = analysis.lastPrice)
                     }
@@ -172,12 +181,13 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
         interval: String,
         profile: RiskProfile,
         fundamental: AssetFundamental?,
+        news: List<NewsItem> = emptyList(),
     ): MarketAnalysis {
         val instrument = row.instrument
         val candles = repository.loadCandles(instrument.figi, interval)
         val dividends = repository.loadDividends(instrument.figi)
         val reports = repository.loadReports(instrument.uid.ifBlank { instrument.figi })
-        return MarketAnalyzer.analyze(instrument, candles, fundamental, dividends, reports, profile)
+        return MarketAnalyzer.analyze(instrument, candles, fundamental, dividends, reports, profile, news)
     }
 
     private fun riskProfile(): RiskProfile = RiskProfile(
@@ -186,6 +196,31 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
         maxLeverage = settings.maxLeverage,
         horizon = Horizon.fromKey(settings.horizon),
     )
+
+    /**
+     * Новости качаются один раз на весь прогон и переиспользуются для всех
+     * бумаг: ленты общие, а тянуть их на каждую бумагу — лишний трафик.
+     * Недоступная лента не должна ломать анализ, поэтому ошибка становится
+     * пометкой в интерфейсе, а не исключением.
+     */
+    private suspend fun loadNews(forceRefresh: Boolean = false): List<NewsItem> {
+        if (!settings.newsEnabled) {
+            _uiState.value = _uiState.value.copy(newsNote = null)
+            return emptyList()
+        }
+        val items = runCatching { newsRepository.load(forceRefresh) }.getOrDefault(emptyList())
+        val failures = newsRepository.failures
+        _uiState.value = _uiState.value.copy(
+            newsNote = when {
+                items.isEmpty() -> "Новостные ленты недоступны" +
+                    (failures.firstOrNull()?.let { " ($it)" } ?: "") +
+                    ". Анализ считается без новостного блока."
+                failures.isEmpty() -> "Загружено ${items.size} новостей из ${NEWS_SOURCE_COUNT} лент."
+                else -> "Загружено ${items.size} новостей, недоступны: ${failures.joinToString("; ")}."
+            },
+        )
+        return items
+    }
 
     /**
      * Лёгкое обновление цен одним запросом на весь список — гоняется часто,
@@ -238,7 +273,8 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
         val instrument = settings.watchlist.firstOrNull { it.figi == figi } ?: return
         runCatching {
             val fundamental = repository.loadFundamentals(listOf(instrument.assetUid))[instrument.assetUid]
-            val analysis = analyzeRow(WatchRow(instrument), settings.candleInterval, riskProfile(), fundamental)
+            val news = loadNews()
+            val analysis = analyzeRow(WatchRow(instrument), settings.candleInterval, riskProfile(), fundamental, news)
             val status = runCatching { repository.loadTradingStatus(figi) }.getOrNull()
             val book = runCatching { repository.loadOrderBook(figi) }.getOrNull()
             Triple(analysis, status, book)
@@ -334,6 +370,12 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
         reloadSettings()
     }
 
+    fun setNewsEnabled(enabled: Boolean) {
+        settings.newsEnabled = enabled
+        reloadSettings()
+        refreshAll()
+    }
+
     fun setHorizon(horizon: Horizon) {
         settings.horizon = horizon.name
         reloadSettings()
@@ -405,13 +447,14 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
             val fundamentals = runCatching {
                 repository.loadFundamentals(pending.map { it.instrument.assetUid })
             }.getOrDefault(emptyMap())
+            val news = loadNews()
 
             val updated = _uiState.value.rows.map { row ->
                 if (row.analysis != null) {
                     row
                 } else {
                     runCatching {
-                        analyzeRow(row, interval, profile, fundamentals[row.instrument.assetUid])
+                        analyzeRow(row, interval, profile, fundamentals[row.instrument.assetUid], news)
                     }.map { row.copy(analysis = it, lastPrice = it.lastPrice) }.getOrDefault(row)
                 }
             }

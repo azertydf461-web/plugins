@@ -56,6 +56,11 @@ class AnalystSettingsStore(context: Context) {
         get() = prefs.getString(KEY_HORIZON, DEFAULT_HORIZON) ?: DEFAULT_HORIZON
         set(value) = prefs.edit().putString(KEY_HORIZON, value).apply()
 
+    /** Учитывать ли новостной фон: ленты качаются из интернета, это можно отключить. */
+    var newsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_NEWS_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_NEWS_ENABLED, value).apply()
+
     var watchlist: List<WatchedInstrument>
         get() = runCatching {
             prefs.getString(KEY_WATCHLIST, null)
@@ -81,6 +86,7 @@ class AnalystSettingsStore(context: Context) {
         const val KEY_RISK_PERCENT = "risk_per_trade_percent"
         const val KEY_MAX_LEVERAGE = "max_leverage"
         const val KEY_HORIZON = "horizon"
+        const val KEY_NEWS_ENABLED = "news_enabled"
         const val DEFAULT_INTERVAL = "CANDLE_INTERVAL_15_MIN"
         const val DEFAULT_HORIZON = "SWING"
     }
