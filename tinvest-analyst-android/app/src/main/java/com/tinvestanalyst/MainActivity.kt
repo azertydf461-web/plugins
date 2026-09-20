@@ -23,11 +23,13 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tinvestanalyst.ui.AnalystSettingsScreen
 import com.tinvestanalyst.ui.AnalystViewModel
+import com.tinvestanalyst.ui.IdeasScreen
 import com.tinvestanalyst.ui.InstrumentCatalogScreen
 import com.tinvestanalyst.ui.InstrumentDetailScreen
 import com.tinvestanalyst.ui.WatchlistScreen
 
 private enum class Tab(val title: String, val icon: String) {
+    IDEAS("Идеи", "★"),
     OVERVIEW("Обзор", "◆"),
     CATALOG("Каталог", "☰"),
     SETTINGS("Настройки", "⚙"),
@@ -48,15 +50,15 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AnalystApp() {
     val viewModel: AnalystViewModel = viewModel()
-    var tab by remember { mutableStateOf(Tab.OVERVIEW) }
+    var tab by remember { mutableStateOf(Tab.IDEAS) }
     var detailOpen by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = detailOpen || tab != Tab.OVERVIEW) {
+    BackHandler(enabled = detailOpen || tab != Tab.IDEAS) {
         if (detailOpen) {
             viewModel.closeInstrument()
             detailOpen = false
         } else {
-            tab = Tab.OVERVIEW
+            tab = Tab.IDEAS
         }
     }
 
@@ -77,7 +79,8 @@ private fun AnalystApp() {
                 title = {
                     Text(
                         when (tab) {
-                            Tab.OVERVIEW -> "Аналитик рынка"
+                            Tab.IDEAS -> "Идеи рынка"
+                            Tab.OVERVIEW -> "Наблюдение"
                             Tab.CATALOG -> "Каталог активов"
                             Tab.SETTINGS -> "Настройки"
                         },
@@ -105,6 +108,14 @@ private fun AnalystApp() {
     ) { padding ->
         Surface(Modifier.fillMaxSize().padding(padding)) {
             when (tab) {
+                Tab.IDEAS -> IdeasScreen(
+                    viewModel = viewModel,
+                    onOpenInstrument = { figi ->
+                        viewModel.openInstrument(figi)
+                        detailOpen = true
+                    },
+                )
+
                 Tab.OVERVIEW -> WatchlistScreen(
                     viewModel = viewModel,
                     onOpenCatalog = { tab = Tab.CATALOG },

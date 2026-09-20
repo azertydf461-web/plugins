@@ -36,6 +36,26 @@ class AnalystSettingsStore(context: Context) {
         get() = prefs.getString(KEY_INTERVAL, DEFAULT_INTERVAL) ?: DEFAULT_INTERVAL
         set(value) = prefs.edit().putString(KEY_INTERVAL, value).apply()
 
+    /** Капитал, от которого считается размер позиции. 0 — расчёт не делается. */
+    var capital: Double
+        get() = prefs.getString(KEY_CAPITAL, null)?.toDoubleOrNull() ?: 0.0
+        set(value) = prefs.edit().putString(KEY_CAPITAL, value.toString()).apply()
+
+    /** Сколько процентов капитала допустимо потерять на одной сделке. */
+    var riskPerTradePercent: Double
+        get() = prefs.getString(KEY_RISK_PERCENT, null)?.toDoubleOrNull() ?: 1.0
+        set(value) = prefs.edit().putString(KEY_RISK_PERCENT, value.toString()).apply()
+
+    /** Потолок плеча, который пользователь готов использовать (1.0 — без плеча). */
+    var maxLeverage: Double
+        get() = prefs.getString(KEY_MAX_LEVERAGE, null)?.toDoubleOrNull() ?: 1.0
+        set(value) = prefs.edit().putString(KEY_MAX_LEVERAGE, value.toString()).apply()
+
+    /** Горизонт: от него зависит, что важнее — техника или отчётность. */
+    var horizon: String
+        get() = prefs.getString(KEY_HORIZON, DEFAULT_HORIZON) ?: DEFAULT_HORIZON
+        set(value) = prefs.edit().putString(KEY_HORIZON, value).apply()
+
     var watchlist: List<WatchedInstrument>
         get() = runCatching {
             prefs.getString(KEY_WATCHLIST, null)
@@ -57,6 +77,11 @@ class AnalystSettingsStore(context: Context) {
         const val KEY_TOKEN = "api_token"
         const val KEY_WATCHLIST = "watchlist"
         const val KEY_INTERVAL = "candle_interval"
+        const val KEY_CAPITAL = "capital"
+        const val KEY_RISK_PERCENT = "risk_per_trade_percent"
+        const val KEY_MAX_LEVERAGE = "max_leverage"
+        const val KEY_HORIZON = "horizon"
         const val DEFAULT_INTERVAL = "CANDLE_INTERVAL_15_MIN"
+        const val DEFAULT_HORIZON = "SWING"
     }
 }

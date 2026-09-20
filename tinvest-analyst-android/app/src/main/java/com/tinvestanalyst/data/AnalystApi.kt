@@ -29,6 +29,25 @@ interface AnalystApi {
         @Body request: InstrumentsRequest,
     ): InstrumentsResponse
 
+    @POST("tinkoff.public.invest.api.contract.v1.InstrumentsService/GetDividends")
+    suspend fun getDividends(
+        @Header("Authorization") auth: String,
+        @Body request: GetDividendsRequest,
+    ): GetDividendsResponse
+
+    /** Показатели отчётности; принимает сразу список активов — один запрос на группу. */
+    @POST("tinkoff.public.invest.api.contract.v1.InstrumentsService/GetAssetFundamentals")
+    suspend fun getAssetFundamentals(
+        @Header("Authorization") auth: String,
+        @Body request: GetAssetFundamentalsRequest,
+    ): GetAssetFundamentalsResponse
+
+    @POST("tinkoff.public.invest.api.contract.v1.InstrumentsService/GetAssetReports")
+    suspend fun getAssetReports(
+        @Header("Authorization") auth: String,
+        @Body request: GetAssetReportsRequest,
+    ): GetAssetReportsResponse
+
     @POST("tinkoff.public.invest.api.contract.v1.MarketDataService/GetCandles")
     suspend fun getCandles(
         @Header("Authorization") auth: String,

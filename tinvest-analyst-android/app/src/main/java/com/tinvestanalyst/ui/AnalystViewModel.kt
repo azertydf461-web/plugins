@@ -3,10 +3,13 @@ package com.tinvestanalyst.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.tinvestanalyst.analysis.Horizon
 import com.tinvestanalyst.analysis.MarketAnalysis
 import com.tinvestanalyst.analysis.MarketAnalyzer
+import com.tinvestanalyst.analysis.RiskProfile
 import com.tinvestanalyst.data.AnalystRepository
 import com.tinvestanalyst.data.AnalystSettingsStore
+import com.tinvestanalyst.data.AssetFundamental
 import com.tinvestanalyst.data.CheckStatus
 import com.tinvestanalyst.data.DiagnosticStep
 import com.tinvestanalyst.data.Instrument
@@ -34,7 +37,17 @@ data class AnalystUiState(
     val lastUpdateMillis: Long? = null,
     val error: String? = null,
     val interval: String = "CANDLE_INTERVAL_15_MIN",
-)
+    val progress: Pair<Int, Int>? = null,
+    val capital: Double = 0.0,
+    val riskPerTradePercent: Double = 1.0,
+    val maxLeverage: Double = 1.0,
+    val horizon: Horizon = Horizon.SWING,
+) {
+    /** Идеи — те же бумаги, отсортированные по силе сигнала. */
+    val rankedIdeas: List<WatchRow>
+        get() = rows.filter { it.analysis != null }
+            .sortedByDescending { it.analysis?.weightedScore ?: 0.0 }
+}
 
 data class DetailUiState(
     val figi: String,
@@ -104,6 +117,10 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
         _uiState.value = _uiState.value.copy(
             hasToken = !settings.apiToken.isNullOrBlank(),
             interval = settings.candleInterval,
+            capital = settings.capital,
+            riskPerTradePercent = settings.riskPerTradePercent,
+            maxLeverage = settings.maxLeverage,
+            horizon = Horizon.fromKey(settings.horizon),
             rows = settings.watchlist.map { watched ->
                 _uiState.value.rows.firstOrNull { it.instrument.figi == watched.figi }
                     ?: WatchRow(watched)
@@ -111,26 +128,33 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
-    /** Полный пересчёт: свечи и анализ по каждому инструменту списка. */
+    /** Полный пересчёт: свечи, отчётность, дивиденды и анализ по всему списку. */
     fun refreshAll() {
         if (_uiState.value.isRefreshing) return
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null)
+            val rows = _uiState.value.rows
+            _uiState.value = _uiState.value.copy(isRefreshing = true, error = null, progress = 0 to rows.size)
             val interval = settings.candleInterval
+            val profile = riskProfile()
+            // Отчётность запрашивается одним запросом на весь список: API
+            // принимает массив активов, и это дешевле, чем запрос на бумагу.
+            val fundamentals = runCatching {
+                repository.loadFundamentals(rows.map { it.instrument.assetUid })
+            }.getOrDefault(emptyMap())
+
             val updated = mutableListOf<WatchRow>()
             var failure: String? = null
 
-            for (row in _uiState.value.rows) {
-                val result = runCatching {
-                    val candles = repository.loadCandles(row.instrument.figi, interval)
-                    MarketAnalyzer.analyze(row.instrument, candles)
-                }
-                result.onSuccess { analysis ->
-                    updated += row.copy(analysis = analysis, lastPrice = analysis.lastPrice)
-                }.onFailure { error ->
-                    failure = failure ?: error.message
-                    updated += row
-                }
+            rows.forEachIndexed { index, row ->
+                runCatching { analyzeRow(row, interval, profile, fundamentals[row.instrument.assetUid]) }
+                    .onSuccess { analysis ->
+                        updated += row.copy(analysis = analysis, lastPrice = analysis.lastPrice)
+                    }
+                    .onFailure { error ->
+                        failure = failure ?: error.message
+                        updated += row
+                    }
+                _uiState.value = _uiState.value.copy(progress = (index + 1) to rows.size)
             }
 
             _uiState.value = _uiState.value.copy(
@@ -138,9 +162,30 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
                 isRefreshing = false,
                 lastUpdateMillis = System.currentTimeMillis(),
                 error = failure,
+                progress = null,
             )
         }
     }
+
+    private suspend fun analyzeRow(
+        row: WatchRow,
+        interval: String,
+        profile: RiskProfile,
+        fundamental: AssetFundamental?,
+    ): MarketAnalysis {
+        val instrument = row.instrument
+        val candles = repository.loadCandles(instrument.figi, interval)
+        val dividends = repository.loadDividends(instrument.figi)
+        val reports = repository.loadReports(instrument.uid.ifBlank { instrument.figi })
+        return MarketAnalyzer.analyze(instrument, candles, fundamental, dividends, reports, profile)
+    }
+
+    private fun riskProfile(): RiskProfile = RiskProfile(
+        capital = settings.capital,
+        riskPerTradePercent = settings.riskPerTradePercent,
+        maxLeverage = settings.maxLeverage,
+        horizon = Horizon.fromKey(settings.horizon),
+    )
 
     /**
      * Лёгкое обновление цен одним запросом на весь список — гоняется часто,
@@ -192,8 +237,8 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
     private suspend fun loadDetail(figi: String) {
         val instrument = settings.watchlist.firstOrNull { it.figi == figi } ?: return
         runCatching {
-            val candles = repository.loadCandles(figi, settings.candleInterval)
-            val analysis = MarketAnalyzer.analyze(instrument, candles)
+            val fundamental = repository.loadFundamentals(listOf(instrument.assetUid))[instrument.assetUid]
+            val analysis = analyzeRow(WatchRow(instrument), settings.candleInterval, riskProfile(), fundamental)
             val status = runCatching { repository.loadTradingStatus(figi) }.getOrNull()
             val book = runCatching { repository.loadOrderBook(figi) }.getOrNull()
             Triple(analysis, status, book)
@@ -255,15 +300,44 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun addInstrument(instrument: Instrument) {
-        settings.addToWatchlist(
-            WatchedInstrument(
-                figi = instrument.figi,
-                ticker = instrument.ticker.ifBlank { instrument.figi },
-                name = instrument.name.ifBlank { instrument.ticker },
-            ),
-        )
+        settings.addToWatchlist(instrument.toWatched())
         reloadSettings()
         syncCatalogSelection()
+    }
+
+    /** Ставка риска и размер лота нужны расчёту позиции, поэтому сохраняются сразу. */
+    private fun Instrument.toWatched() = WatchedInstrument(
+        figi = figi,
+        ticker = ticker.ifBlank { figi },
+        name = name.ifBlank { ticker },
+        uid = uid,
+        assetUid = assetUid,
+        lot = lot.coerceAtLeast(1),
+        currency = currency.ifBlank { "rub" },
+        riskRateLong = dlong.toDouble(),
+        shortEnabled = shortEnabledFlag,
+        instrumentType = instrumentType,
+    )
+
+    fun setCapital(value: Double) {
+        settings.capital = value
+        reloadSettings()
+    }
+
+    fun setRiskPerTrade(value: Double) {
+        settings.riskPerTradePercent = value
+        reloadSettings()
+    }
+
+    fun setMaxLeverage(value: Double) {
+        settings.maxLeverage = value
+        reloadSettings()
+    }
+
+    fun setHorizon(horizon: Horizon) {
+        settings.horizon = horizon.name
+        reloadSettings()
+        refreshAll()
     }
 
     fun removeInstrument(figi: String) {
@@ -326,13 +400,18 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isRefreshing = true)
             val interval = settings.candleInterval
+            val profile = riskProfile()
+            val pending = _uiState.value.rows.filter { it.analysis == null }
+            val fundamentals = runCatching {
+                repository.loadFundamentals(pending.map { it.instrument.assetUid })
+            }.getOrDefault(emptyMap())
+
             val updated = _uiState.value.rows.map { row ->
                 if (row.analysis != null) {
                     row
                 } else {
                     runCatching {
-                        val candles = repository.loadCandles(row.instrument.figi, interval)
-                        MarketAnalyzer.analyze(row.instrument, candles)
+                        analyzeRow(row, interval, profile, fundamentals[row.instrument.assetUid])
                     }.map { row.copy(analysis = it, lastPrice = it.lastPrice) }.getOrDefault(row)
                 }
             }
@@ -365,16 +444,9 @@ class AnalystViewModel(application: Application) : AndroidViewModel(application)
 
     /** Добавляет в наблюдение всю отфильтрованную группу — например, все рублёвые акции. */
     fun addVisibleGroup() {
-        val toAdd = _catalog.value.visible.filterNot { _catalog.value.addedFigis.contains(it.figi) }
-        toAdd.forEach { instrument ->
-            settings.addToWatchlist(
-                WatchedInstrument(
-                    figi = instrument.figi,
-                    ticker = instrument.ticker.ifBlank { instrument.figi },
-                    name = instrument.name.ifBlank { instrument.ticker },
-                ),
-            )
-        }
+        _catalog.value.visible
+            .filterNot { _catalog.value.addedFigis.contains(it.figi) }
+            .forEach { settings.addToWatchlist(it.toWatched()) }
         reloadSettings()
         syncCatalogSelection()
     }

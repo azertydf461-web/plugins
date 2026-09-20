@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -22,7 +21,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.tinvestanalyst.analysis.AnalysisBlock
 import com.tinvestanalyst.analysis.AnalysisFactor
+import com.tinvestanalyst.analysis.PositionPlan
+import com.tinvestanalyst.analysis.UpcomingEvent
 import com.tinvestanalyst.analysis.fmt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,13 +93,18 @@ fun InstrumentDetailScreen(viewModel: AnalystViewModel, onBack: () -> Unit) {
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            "Уверенность ${analysis.confidencePercent}% " +
-                                "(итог ${analysis.totalScore} из ±${analysis.maxScore})",
+                            "Уверенность ${analysis.confidencePercent}%",
                             style = MaterialTheme.typography.labelMedium,
                         )
                         Text(
                             analysis.summary,
                             style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                        Text(
+                            analysis.coverageNote,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = HOLD_COLOR,
                             modifier = Modifier.padding(top = 6.dp),
                         )
                         analysis.dataNote?.let {
@@ -112,6 +119,14 @@ fun InstrumentDetailScreen(viewModel: AnalystViewModel, onBack: () -> Unit) {
                 }
             }
 
+            analysis.positionPlan?.let { plan ->
+                item { PositionPlanCard(plan, analysis.instrument.currency) }
+            }
+
+            if (analysis.events.isNotEmpty()) {
+                item { EventsCard(analysis.events) }
+            }
+
             item {
                 CandleChart(
                     candles = analysis.candles,
@@ -120,40 +135,22 @@ fun InstrumentDetailScreen(viewModel: AnalystViewModel, onBack: () -> Unit) {
                 )
             }
 
-            item {
-                Text(
-                    "Из чего сложился вывод",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
-                )
+            analysis.blocks.forEach { block ->
+                item { BlockHeader(block) }
+                block.factors.forEach { factor ->
+                    item { FactorCard(factor) }
+                }
             }
-
-            items(analysis.factors) { factor -> FactorCard(factor) }
 
             item {
                 Card(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("Риск и уровни", style = MaterialTheme.typography.titleSmall)
+                        Text("Волатильность", style = MaterialTheme.typography.titleSmall)
                         Text(
                             analysis.volatilityNote,
                             style = MaterialTheme.typography.bodySmall,
                             modifier = Modifier.padding(top = 4.dp),
                         )
-                        analysis.suggestedStop?.let {
-                            Text(
-                                "Ориентир стоп-лосса: ${fmt(it)} (1.5 ATR ниже цены)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = SELL_COLOR,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-                        }
-                        analysis.suggestedTarget?.let {
-                            Text(
-                                "Ориентир цели: ${fmt(it)} (2.5 ATR выше цены)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = BUY_COLOR,
-                            )
-                        }
                         detail?.orderBookNote?.let {
                             Text(
                                 it,
@@ -167,11 +164,108 @@ fun InstrumentDetailScreen(viewModel: AnalystViewModel, onBack: () -> Unit) {
 
             item {
                 Text(
-                    "Расчёт основан только на ценах и объёмах. Он не учитывает отчётность эмитента, " +
-                        "новости, дивиденды и ваш риск-профиль. Решение принимаете вы.",
+                    "Учтены цены, объёмы, отчётность эмитента, дивиденды и календарь событий. " +
+                        "Новостной фон не учитывается: брокерский API новостей не отдаёт. " +
+                        "Это не индивидуальная инвестиционная рекомендация — решение принимаете вы.",
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(bottom = 32.dp),
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BlockHeader(block: AnalysisBlock) {
+    val color = when {
+        block.normalized > 0.1 -> BUY_COLOR
+        block.normalized < -0.1 -> SELL_COLOR
+        else -> HOLD_COLOR
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(block.title, style = MaterialTheme.typography.titleMedium)
+        Text(
+            "${fmt(block.normalized)} · вес ${(block.weight * 100).toInt()}%",
+            style = MaterialTheme.typography.labelMedium,
+            color = color,
+            fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/**
+ * Карточка сделки: где вход, стоп и цель, сколько брать и нужно ли плечо.
+ * Всё считается от допустимого убытка на сделку, а не от размера счёта.
+ */
+@Composable
+private fun PositionPlanCard(plan: PositionPlan, currency: String) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Расчёт сделки и риска", style = MaterialTheme.typography.titleMedium)
+
+            PlanRow("Вход", fmt(plan.entryPrice))
+            PlanRow("Стоп-лосс (1.5 ATR)", fmt(plan.stopPrice), SELL_COLOR)
+            PlanRow("Цель (2.5 ATR)", fmt(plan.targetPrice), BUY_COLOR)
+            PlanRow("Отношение прибыль/риск", "${fmt(plan.riskRewardRatio)} : 1")
+
+            if (!plan.blocked) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                PlanRow("Размер позиции", "${plan.lots} лот(ов) = ${plan.shares} шт.")
+                PlanRow("Стоимость позиции", "${fmt(plan.positionValue)} ${currency.uppercase()}")
+                PlanRow("Под риском", "${fmt(plan.moneyAtRisk)} ${currency.uppercase()}", SELL_COLOR)
+                PlanRow("Своих средств нужно", "${fmt(plan.ownFundsRequired)} ${currency.uppercase()}")
+                PlanRow("Используемое плечо", "${fmt(plan.leverageUsed)}x")
+            }
+            plan.maxLeverageAvailable?.let {
+                PlanRow("Доступное плечо по бумаге", "${fmt(it)}x")
+            }
+
+            plan.notes.forEach { note ->
+                Text(
+                    note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (plan.blocked) MaterialTheme.colorScheme.error else HOLD_COLOR,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlanRow(label: String, value: String, color: androidx.compose.ui.graphics.Color? = null) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            color = color ?: MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun EventsCard(events: List<UpcomingEvent>) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Ближайшие события", style = MaterialTheme.typography.titleMedium)
+            events.take(4).forEach { event ->
+                Column(Modifier.padding(top = 8.dp)) {
+                    Text(
+                        "${event.title} — ${event.date} (через ${event.daysAway} дн.)",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = if (event.daysAway <= 5) STRONG_SELL_COLOR else MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(event.detail, style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
     }

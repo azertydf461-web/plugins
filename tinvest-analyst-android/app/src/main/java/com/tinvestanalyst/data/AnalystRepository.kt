@@ -6,6 +6,7 @@ import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -96,6 +97,65 @@ class AnalystRepository(private val settings: AnalystSettingsStore) {
         return api.getLastPrices(auth(), GetLastPricesRequest(figis))
             .lastPrices
             .associate { it.figi to it.price.toDouble() }
+    }
+
+    private val fundamentalsCache = ConcurrentHashMap<String, AssetFundamental>()
+    private val dividendsCache = ConcurrentHashMap<String, List<Dividend>>()
+    private val reportsCache = ConcurrentHashMap<String, List<AssetReportEvent>>()
+
+    /**
+     * Показатели отчётности сразу по группе активов: API принимает список, и
+     * один запрос на весь список наблюдения дешевле, чем запрос на бумагу.
+     * Данные меняются раз в квартал, поэтому кешируются до перезапуска.
+     */
+    suspend fun loadFundamentals(assetUids: List<String>): Map<String, AssetFundamental> {
+        val missing = assetUids.filter { it.isNotBlank() && !fundamentalsCache.containsKey(it) }
+        if (missing.isNotEmpty()) {
+            runCatching {
+                api.getAssetFundamentals(auth(), GetAssetFundamentalsRequest(missing.distinct().take(100)))
+                    .fundamentals
+            }.onSuccess { list ->
+                list.forEach { item -> fundamentalsCache[item.assetUid] = item }
+            }
+        }
+        return assetUids.mapNotNull { uid -> fundamentalsCache[uid]?.let { uid to it } }.toMap()
+    }
+
+    /** История дивидендов за три года назад и год вперёд — вперёд, чтобы увидеть объявленную отсечку. */
+    suspend fun loadDividends(instrumentId: String): List<Dividend> {
+        dividendsCache[instrumentId]?.let { return it }
+        val now = Instant.now()
+        val dividends = runCatching {
+            api.getDividends(
+                auth(),
+                GetDividendsRequest(
+                    instrumentId = instrumentId,
+                    from = now.minus(1095, ChronoUnit.DAYS).toString(),
+                    to = now.plus(365, ChronoUnit.DAYS).toString(),
+                ),
+            ).dividends
+        }.getOrDefault(emptyList())
+        dividendsCache[instrumentId] = dividends
+        return dividends
+    }
+
+    /** Ближайшие даты публикации отчётности — это событийный риск на горизонте сделки. */
+    suspend fun loadReports(instrumentId: String): List<AssetReportEvent> {
+        if (instrumentId.isBlank()) return emptyList()
+        reportsCache[instrumentId]?.let { return it }
+        val now = Instant.now()
+        val events = runCatching {
+            api.getAssetReports(
+                auth(),
+                GetAssetReportsRequest(
+                    instrumentId = instrumentId,
+                    from = now.minus(180, ChronoUnit.DAYS).toString(),
+                    to = now.plus(180, ChronoUnit.DAYS).toString(),
+                ),
+            ).events
+        }.getOrDefault(emptyList())
+        reportsCache[instrumentId] = events
+        return events
     }
 
     suspend fun loadOrderBook(figi: String, depth: Int = 10): GetOrderBookResponse =

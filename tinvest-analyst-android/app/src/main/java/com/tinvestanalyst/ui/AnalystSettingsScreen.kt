@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,7 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.tinvestanalyst.analysis.Horizon
 import com.tinvestanalyst.data.CheckStatus
 import com.tinvestanalyst.data.DiagnosticStep
 
@@ -123,6 +126,62 @@ fun AnalystSettingsScreen(viewModel: AnalystViewModel) {
         item {
             Column(Modifier.padding(top = 16.dp)) {
                 HorizontalDivider()
+                Text(
+                    "Риск-профиль",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                Text(
+                    "Из этих цифр считаются размер позиции, стоп и потребность в плече.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+
+                NumberField(
+                    label = "Капитал, ₽",
+                    value = state.capital,
+                    onValueChange = { viewModel.setCapital(it) },
+                )
+                NumberField(
+                    label = "Риск на сделку, % от капитала",
+                    value = state.riskPerTradePercent,
+                    onValueChange = { viewModel.setRiskPerTrade(it) },
+                )
+                NumberField(
+                    label = "Максимальное плечо (1 = без плеча)",
+                    value = state.maxLeverage,
+                    onValueChange = { viewModel.setMaxLeverage(it) },
+                )
+
+                Text(
+                    "Горизонт",
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                Text(
+                    "Определяет, что важнее в итоговом выводе: техника или бизнес эмитента.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Horizon.entries.forEach { horizon ->
+                        FilterChip(
+                            selected = state.horizon == horizon,
+                            onClick = { viewModel.setHorizon(horizon) },
+                            label = { Text(horizon.title.substringBefore(" (")) },
+                        )
+                    }
+                }
+                Text(
+                    "Веса: техника ${(state.horizon.technicalWeight * 100).toInt()}%, " +
+                        "отчётность ${(state.horizon.fundamentalWeight * 100).toInt()}%, " +
+                        "дивиденды ${(state.horizon.dividendWeight * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                )
+            }
+        }
+
+        item {
+            Column(Modifier.padding(top = 16.dp)) {
+                HorizontalDivider()
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -170,6 +229,31 @@ fun AnalystSettingsScreen(viewModel: AnalystViewModel) {
         item { Text("", Modifier.padding(bottom = 32.dp)) }
     }
 }
+
+/**
+ * Число правится в локальном черновике и сохраняется только когда строка
+ * разбирается в число: иначе стирание последней цифры сбрасывало бы
+ * настройку в ноль прямо во время ввода.
+ */
+@Composable
+private fun NumberField(label: String, value: Double, onValueChange: (Double) -> Unit) {
+    var draft by remember(value) { mutableStateOf(if (value == 0.0) "" else trimZeros(value)) }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = { text ->
+            draft = text.replace(',', '.').filter { it.isDigit() || it == '.' }
+            draft.toDoubleOrNull()?.let(onValueChange)
+            if (draft.isBlank()) onValueChange(0.0)
+        },
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        label = { Text(label) },
+    )
+}
+
+private fun trimZeros(value: Double): String =
+    if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
 
 @Composable
 private fun DiagnosticCard(step: DiagnosticStep) {

@@ -1,6 +1,9 @@
 package com.tinvestanalyst.analysis
 
+import com.tinvestanalyst.data.AssetFundamental
+import com.tinvestanalyst.data.AssetReportEvent
 import com.tinvestanalyst.data.Candle
+import com.tinvestanalyst.data.Dividend
 import com.tinvestanalyst.data.WatchedInstrument
 import kotlin.math.abs
 import kotlin.math.min
@@ -26,36 +29,53 @@ data class AnalysisFactor(
     val interpretation: String,
 )
 
+/** Блок анализа: техника, отчётность или дивиденды. */
+data class AnalysisBlock(
+    val title: String,
+    val factors: List<AnalysisFactor>,
+    val weight: Double,
+) {
+    val available: Boolean get() = factors.isNotEmpty()
+    val maxScore: Int get() = factors.sumOf { it.weight }
+    val rawScore: Int get() = factors.sumOf { it.score }
+
+    /** Приведённый к [-1; 1] балл, чтобы блоки разного размера были сравнимы. */
+    val normalized: Double get() = if (maxScore == 0) 0.0 else rawScore.toDouble() / maxScore
+}
+
 data class MarketAnalysis(
     val instrument: WatchedInstrument,
     val lastPrice: Double,
     val changePercent: Double,
     val verdict: Verdict,
     val confidencePercent: Int,
-    val totalScore: Int,
-    val maxScore: Int,
-    val factors: List<AnalysisFactor>,
+    val weightedScore: Double,
+    val blocks: List<AnalysisBlock>,
     val summary: String,
     val volatilityNote: String,
-    val suggestedStop: Double?,
-    val suggestedTarget: Double?,
+    val events: List<UpcomingEvent>,
+    val positionPlan: PositionPlan?,
+    val coverageNote: String,
     val candles: List<Candle>,
     val fastSmaSeries: List<Double?>,
     val slowSmaSeries: List<Double?>,
     val generatedAtMillis: Long,
     val dataNote: String? = null,
 ) {
+    val factors: List<AnalysisFactor> get() = blocks.flatMap { it.factors }
     val bullishFactors: Int get() = factors.count { it.score > 0 }
     val bearishFactors: Int get() = factors.count { it.score < 0 }
 }
 
 /**
- * Считает сводную рекомендацию как сумму независимых факторов. Каждый фактор
- * возвращает и число, и его трактовку, поэтому итог всегда разложим на
- * составляющие — пользователь видит не только «покупать», но и почему.
+ * Сводит вместе технический анализ, отчётность эмитента и дивиденды. Вес
+ * блоков зависит от горизонта: на днях решает техника, на годах — бизнес,
+ * поэтому один и тот же набор цифр даёт разные выводы спекулянту и
+ * долгосрочному инвестору.
  *
- * Это технический анализ, а не индивидуальная инвестиционная рекомендация:
- * модель не знает ни целей, ни горизонта, ни риск-профиля инвестора.
+ * Чего здесь принципиально нет — новостей: API брокера их не отдаёт, и
+ * подменять их догадками нельзя. Событийный риск учитывается только по
+ * датам, которые API действительно знает: отсечки и публикации отчётности.
  */
 object MarketAnalyzer {
 
@@ -63,11 +83,20 @@ object MarketAnalyzer {
     private const val SLOW_PERIOD = 21
     private const val LONG_PERIOD = 50
 
-    fun analyze(instrument: WatchedInstrument, candles: List<Candle>): MarketAnalysis {
+    fun analyze(
+        instrument: WatchedInstrument,
+        candles: List<Candle>,
+        fundamental: AssetFundamental? = null,
+        dividends: List<Dividend> = emptyList(),
+        reports: List<AssetReportEvent> = emptyList(),
+        profile: RiskProfile? = null,
+    ): MarketAnalysis {
         val closes = candles.map { it.close.toDouble() }
         val lastPrice = closes.lastOrNull() ?: 0.0
         val fastSmaSeries = Indicators.smaSeries(closes, FAST_PERIOD)
         val slowSmaSeries = Indicators.smaSeries(closes, SLOW_PERIOD)
+        val horizon = profile?.horizon ?: Horizon.SWING
+        val events = DividendAnalyzer.upcomingEvents(dividends, reports)
 
         if (closes.size < SLOW_PERIOD + 2) {
             return MarketAnalysis(
@@ -76,13 +105,13 @@ object MarketAnalyzer {
                 changePercent = 0.0,
                 verdict = Verdict.HOLD,
                 confidencePercent = 0,
-                totalScore = 0,
-                maxScore = 0,
-                factors = emptyList(),
+                weightedScore = 0.0,
+                blocks = emptyList(),
                 summary = "Недостаточно истории для анализа.",
                 volatilityNote = "",
-                suggestedStop = null,
-                suggestedTarget = null,
+                events = events,
+                positionPlan = null,
+                coverageNote = "Технический блок недоступен: мало свечей.",
                 candles = candles,
                 fastSmaSeries = fastSmaSeries,
                 slowSmaSeries = slowSmaSeries,
@@ -92,7 +121,7 @@ object MarketAnalyzer {
             )
         }
 
-        val factors = buildList {
+        val technicalFactors = buildList {
             add(trendFactor(closes))
             add(longTrendFactor(closes, lastPrice))
             rsiFactor(closes)?.let(::add)
@@ -100,11 +129,23 @@ object MarketAnalyzer {
             bollingerFactor(closes, lastPrice)?.let(::add)
             volumeFactor(candles, closes)?.let(::add)
         }
+        val fundamentalFactors = FundamentalAnalyzer.analyze(fundamental)
+        val dividendFactors = listOfNotNull(DividendAnalyzer.analyze(dividends, fundamental))
 
-        val totalScore = factors.sumOf { it.score }
-        val maxScore = factors.sumOf { it.weight }
-        val verdict = verdictFor(totalScore, maxScore)
-        val confidence = if (maxScore == 0) 0 else min(95, (abs(totalScore).toDouble() / maxScore * 100).roundToInt())
+        val blocks = listOf(
+            AnalysisBlock("Технический анализ", technicalFactors, horizon.technicalWeight),
+            AnalysisBlock("Отчётность эмитента", fundamentalFactors, horizon.fundamentalWeight),
+            AnalysisBlock("Дивиденды", dividendFactors, horizon.dividendWeight),
+        )
+
+        // Недоступный блок не обнуляет итог, а перераспределяет вес на
+        // остальные: иначе бумага без отчётности всегда выглядела бы хуже.
+        val availableWeight = blocks.filter { it.available }.sumOf { it.weight }
+        val weightedScore = if (availableWeight == 0.0) {
+            0.0
+        } else {
+            blocks.filter { it.available }.sumOf { it.normalized * it.weight } / availableWeight
+        }
 
         val atr = Indicators.atr(candles)
         val atrPercent = if (atr != null && lastPrice > 0) atr / lastPrice * 100 else null
@@ -114,9 +155,13 @@ object MarketAnalyzer {
             0.0
         }
 
-        val bullish = verdict == Verdict.BUY || verdict == Verdict.STRONG_BUY
-        val suggestedStop = atr?.let { if (bullish) lastPrice - 1.5 * it else null }
-        val suggestedTarget = atr?.let { if (bullish) lastPrice + 2.5 * it else null }
+        val nearestEvent = events.firstOrNull()
+        val verdict = verdictFor(weightedScore)
+        val confidence = confidenceFor(weightedScore, blocks, nearestEvent)
+
+        val plan = profile?.let {
+            RiskCalculator.plan(instrument, it, lastPrice, atr)
+        }
 
         return MarketAnalysis(
             instrument = instrument,
@@ -124,19 +169,21 @@ object MarketAnalyzer {
             changePercent = changePercent,
             verdict = verdict,
             confidencePercent = confidence,
-            totalScore = totalScore,
-            maxScore = maxScore,
-            factors = factors,
-            summary = buildSummary(verdict, factors, totalScore, maxScore),
+            weightedScore = weightedScore,
+            blocks = blocks.filter { it.available },
+            summary = buildSummary(verdict, blocks, horizon, weightedScore),
             volatilityNote = volatilityNote(atr, atrPercent),
-            suggestedStop = suggestedStop,
-            suggestedTarget = suggestedTarget,
+            events = events,
+            positionPlan = plan,
+            coverageNote = coverageNote(blocks),
             candles = candles,
             fastSmaSeries = fastSmaSeries,
             slowSmaSeries = slowSmaSeries,
             generatedAtMillis = System.currentTimeMillis(),
         )
     }
+
+    // --- Технические факторы ----------------------------------------------
 
     private fun trendFactor(closes: List<Double>): AnalysisFactor {
         val fast = Indicators.sma(closes, FAST_PERIOD) ?: 0.0
@@ -217,13 +264,7 @@ object MarketAnalyzer {
             rsi > 55 -> "Умеренная перегретость — покупать по текущей цене дороговато."
             else -> "RSI в нейтральной зоне, крайностей нет."
         }
-        return AnalysisFactor(
-            name = "Импульс (RSI 14)",
-            score = score,
-            weight = 2,
-            reading = "RSI ${fmt(rsi)}",
-            interpretation = interpretation,
-        )
+        return AnalysisFactor("Импульс (RSI 14)", score, 2, "RSI ${fmt(rsi)}", interpretation)
     }
 
     private fun macdFactor(closes: List<Double>): AnalysisFactor? {
@@ -302,37 +343,56 @@ object MarketAnalyzer {
         )
     }
 
-    private fun verdictFor(totalScore: Int, maxScore: Int): Verdict {
-        if (maxScore == 0) return Verdict.HOLD
-        val normalized = totalScore.toDouble() / maxScore
-        return when {
-            normalized >= 0.55 -> Verdict.STRONG_BUY
-            normalized >= 0.22 -> Verdict.BUY
-            normalized <= -0.55 -> Verdict.STRONG_SELL
-            normalized <= -0.22 -> Verdict.SELL
-            else -> Verdict.HOLD
-        }
+    // --- Свод ---------------------------------------------------------------
+
+    private fun verdictFor(weighted: Double): Verdict = when {
+        weighted >= 0.45 -> Verdict.STRONG_BUY
+        weighted >= 0.18 -> Verdict.BUY
+        weighted <= -0.45 -> Verdict.STRONG_SELL
+        weighted <= -0.18 -> Verdict.SELL
+        else -> Verdict.HOLD
+    }
+
+    private fun confidenceFor(
+        weighted: Double,
+        blocks: List<AnalysisBlock>,
+        nearestEvent: UpcomingEvent?,
+    ): Int {
+        val base = min(95.0, abs(weighted) * 130)
+        // Чем меньше блоков доступно, тем меньше оснований доверять выводу.
+        val coverage = blocks.count { it.available }.toDouble() / blocks.size
+        val eventPenalty = if (nearestEvent != null && nearestEvent.daysAway <= 5) 20 else 0
+        return (base * (0.6 + 0.4 * coverage)).roundToInt().minus(eventPenalty).coerceIn(0, 95)
     }
 
     private fun buildSummary(
         verdict: Verdict,
-        factors: List<AnalysisFactor>,
-        totalScore: Int,
-        maxScore: Int,
+        blocks: List<AnalysisBlock>,
+        horizon: Horizon,
+        weighted: Double,
     ): String {
-        val bullish = factors.count { it.score > 0 }
-        val bearish = factors.count { it.score < 0 }
-        val neutral = factors.count { it.score == 0 }
-        val base = "Итог $totalScore из возможных ±$maxScore: за рост $bullish фактор(ов), " +
-            "за снижение $bearish, нейтральных $neutral."
-        val tail = when (verdict) {
-            Verdict.STRONG_BUY -> "Сигналы сходятся в пользу покупки."
-            Verdict.BUY -> "Перевес в пользу покупки, но единогласия нет."
-            Verdict.HOLD -> "Факторы уравновешены — входить в позицию нет основания."
-            Verdict.SELL -> "Перевес в пользу продажи или выхода из позиции."
-            Verdict.STRONG_SELL -> "Сигналы сходятся против удержания позиции."
+        val parts = blocks.filter { it.available }.joinToString("; ") { block ->
+            "${block.title.lowercase()} ${signed(block.normalized)}"
         }
-        return "$base $tail"
+        val tail = when (verdict) {
+            Verdict.STRONG_BUY -> "Блоки сходятся в пользу покупки."
+            Verdict.BUY -> "Перевес в пользу покупки, но единогласия нет."
+            Verdict.HOLD -> "Блоки уравновешены — входить в позицию нет основания."
+            Verdict.SELL -> "Перевес в пользу продажи или выхода из позиции."
+            Verdict.STRONG_SELL -> "Блоки сходятся против удержания позиции."
+        }
+        return "Горизонт «${horizon.title}», итоговый балл ${signed(weighted)} " +
+            "(диапазон от -1 до +1). По блокам: $parts. $tail"
+    }
+
+    private fun coverageNote(blocks: List<AnalysisBlock>): String {
+        val missing = blocks.filterNot { it.available }.map { it.title.lowercase() }
+        return if (missing.isEmpty()) {
+            "Учтены все блоки: техника, отчётность и дивиденды."
+        } else {
+            "Нет данных по блокам: ${missing.joinToString(", ")}. " +
+                "Вес перераспределён на остальные, вывод менее полный."
+        }
     }
 
     private fun volatilityNote(atr: Double?, atrPercent: Double?): String {
@@ -346,6 +406,8 @@ object MarketAnalyzer {
         return "Волатильность $level: ATR(14) = ${fmt(atr)} (${fmt(atrPercent)}% от цены). " +
             "Стоп ближе 1 ATR будет выбивать шумом."
     }
+
+    private fun signed(value: Double): String = (if (value >= 0) "+" else "") + fmt(value)
 }
 
 internal fun fmt(value: Double): String = when {
