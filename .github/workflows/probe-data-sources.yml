@@ -1,0 +1,34 @@
+name: probe-data-sources
+
+# Быстрая проверка, какие открытые источники котировок вообще отвечают
+# с раннера. Нужна, чтобы не выяснять это внутри шестиминутного прогона.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/probe-data-sources.yml'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Проверка источников
+        run: |
+          set -u
+          probe() {
+            local label="$1" url="$2"
+            local code
+            code=$(curl -sS --max-time 30 -o /tmp/probe.out -w '%{http_code}' \
+              -A "Mozilla/5.0 (X11; Linux x86_64)" "$url" || echo "000")
+            echo "--- $label: HTTP $code, $(wc -c < /tmp/probe.out) байт"
+            head -c 180 /tmp/probe.out | tr -d '\n'
+            echo
+          }
+
+          probe "yahoo GC=F"  "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?range=10y&interval=1d"
+          probe "yahoo ^GSPC" "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=10y&interval=1d"
+          probe "yahoo BTC"   "https://query2.finance.yahoo.com/v8/finance/chart/BTC-USD?range=10y&interval=1d"
+          probe "stooq"       "https://stooq.com/q/d/l/?s=eurusd&i=d"
+          probe "cryptocompare" "https://min-api.cryptocompare.com/data/v2/histoday?fsym=BTC&tsym=USD&limit=100"
+          probe "frankfurter" "https://api.frankfurter.app/2016-01-01..2016-02-01?from=USD&to=EUR"
