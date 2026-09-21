@@ -73,36 +73,40 @@ jobs:
             fi
           }
 
-          # Stooq отдаёт всю историю одним CSV: Date,Open,High,Low,Close,Volume.
-          # При исчерпании лимита он возвращает текст вместо данных, поэтому
-          # заголовок проверяется — иначе в прогон уедет мусор.
-          stooq() {
+          # Мировые инструменты берём из открытого chart-эндпоинта Yahoo:
+          # он отдаёт десятилетнюю дневную историю по индексам, валютным
+          # парам, непрерывным товарным фьючерсам и крипте без ключа.
+          # Stooq, который напрашивался первым, отвечает раннеру
+          # JS-заглушкой вместо данных — проверено отдельным прогоном.
+          yahoo() {
             local sym="$1" name="$2"
-            local raw=/tmp/stooq.csv
-            # Без браузерного User-Agent источник отдаёт заглушку вместо CSV,
-            # а один из двух его доменов периодически режет запросы — поэтому
-            # пробуем оба, прежде чем признать инструмент недоступным.
-            local ok=0
-            for host in stooq.com stooq.pl; do
-              curl -sS --max-time 60 -A "Mozilla/5.0 (X11; Linux x86_64)"                 "https://$host/q/d/l/?s=$sym&i=d&d1=$D1&d2=$D2" -o "$raw" || continue
-              if head -1 "$raw" | grep -q '^Date,Open'; then ok=1; break; fi
-            done
-            [ "$ok" -eq 1 ] || {
-              echo "Stooq $sym: данных нет ($(head -c 80 "$raw" | tr -d '\n'))"; return; }
+            local raw=/tmp/yahoo.json
+            local code
+            code=$(curl -sS --max-time 60 -o "$raw" -w '%{http_code}' \
+              -A "Mozilla/5.0 (X11; Linux x86_64)" \
+              "https://query1.finance.yahoo.com/v8/finance/chart/$sym?range=10y&interval=1d") || {
+                echo "Yahoo $sym: запрос не прошёл"; return; }
+            if [ "$code" != "200" ]; then
+              echo "Yahoo $sym: HTTP $code"; return
+            fi
             local file="$OUT/$name.csv"
             echo "open,high,low,close,volume,begin" > "$file"
-            awk -F, 'NR>1 && $5 != "" && $5 != "N/D" {
-              v = ($6 == "" || $6 == "N/D") ? 0 : $6
-              print $2 "," $3 "," $4 "," $5 "," v "," $1
-            }' "$raw" >> "$file"
+            jq -r '.chart.result[0] as $r
+              | ($r.indicators.quote[0]) as $q
+              | range(0; ($r.timestamp | length))
+              | select($q.close[.] != null and $q.open[.] != null
+                       and $q.high[.] != null and $q.low[.] != null)
+              | [ $q.open[.], $q.high[.], $q.low[.], $q.close[.],
+                  ($q.volume[.] // 0), ($r.timestamp[.] | todate) ]
+              | @csv' "$raw" 2>/dev/null | tr -d '"' >> "$file"
             local total=$(( $(wc -l < "$file") - 1 ))
             if [ "$total" -lt 400 ]; then
-              echo "Stooq $sym: только $total свечей — пропускаем"
+              echo "Yahoo $sym: только $total свечей — пропускаем"
               rm -f "$file"
             else
-              echo "Stooq $sym -> $name: $total свечей"
+              echo "Yahoo $sym -> $name: $total свечей"
             fi
-            sleep 2
+            sleep 1
           }
 
           # --- Российские акции -------------------------------------------
@@ -122,29 +126,41 @@ jobs:
           done
 
           # --- Мировые индексы --------------------------------------------
-          stooq "%5Espx" "mir-indeks__SP500"
-          stooq "%5Endx" "mir-indeks__NASDAQ100"
-          stooq "%5Edax" "mir-indeks__DAX"
-          stooq "%5Enkx" "mir-indeks__NIKKEI"
+          yahoo "%5EGSPC"  "mir-indeks__SP500"
+          yahoo "%5ENDX"   "mir-indeks__NASDAQ100"
+          yahoo "%5EGDAXI" "mir-indeks__DAX"
+          yahoo "%5EN225"  "mir-indeks__NIKKEI"
+          yahoo "%5EFTSE"  "mir-indeks__FTSE100"
+          yahoo "%5EHSI"   "mir-indeks__HANGSENG"
+
+          # --- Мировые акции ----------------------------------------------
+          # Нужны, чтобы понять, провал на российских акциях — это свойство
+          # рынка или свойство класса активов вообще.
+          for t in AAPL MSFT XOM JPM KO NVDA; do
+            yahoo "$t" "mir-akcii__$t"
+          done
 
           # --- Валютные пары ----------------------------------------------
-          for p in eurusd usdjpy gbpusd audusd usdchf; do
-            stooq "$p" "mir-valyuta__$(echo "$p" | tr 'a-z' 'A-Z')"
+          for p in EURUSD USDJPY GBPUSD AUDUSD USDCHF USDCNY; do
+            yahoo "$p%3DX" "mir-valyuta__$p"
           done
 
           # --- Товарные фьючерсы (непрерывные серии) ----------------------
           # Отдельный контракт живёт квартал, поэтому десятилетнюю историю
           # даёт только склеенная серия — на ней и проверяем.
-          stooq "gc.f" "tovary__ZOLOTO"
-          stooq "si.f" "tovary__SEREBRO"
-          stooq "cl.f" "tovary__NEFT_WTI"
-          stooq "ng.f" "tovary__GAZ"
-          stooq "hg.f" "tovary__MED"
-          stooq "zw.f" "tovary__PSHENICA"
+          yahoo "GC=F" "tovary__ZOLOTO"
+          yahoo "SI=F" "tovary__SEREBRO"
+          yahoo "PL=F" "tovary__PLATINA"
+          yahoo "HG=F" "tovary__MED"
+          yahoo "CL=F" "tovary__NEFT_WTI"
+          yahoo "BZ=F" "tovary__NEFT_BRENT"
+          yahoo "NG=F" "tovary__GAZ"
+          yahoo "ZW=F" "tovary__PSHENICA"
+          yahoo "ZC=F" "tovary__KUKURUZA"
 
           # --- Крипта ------------------------------------------------------
-          stooq "btcusd" "kripta__BTCUSD"
-          stooq "ethusd" "kripta__ETHUSD"
+          yahoo "BTC-USD" "kripta__BTCUSD"
+          yahoo "ETH-USD" "kripta__ETHUSD"
 
           echo "Итого файлов: $(ls -1 "$OUT" | wc -l)"
 
