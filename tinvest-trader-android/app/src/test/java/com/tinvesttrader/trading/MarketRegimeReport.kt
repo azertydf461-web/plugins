@@ -89,7 +89,11 @@ class MarketRegimeReport {
                 }
             }
 
-            val indexByTime = candles.withIndex().associate { (i, candle) -> candle.time to i }
+            // Прогон печатает время входа в сокращённом виде, а не так, как оно
+            // записано в свече: искать надо по той же форме, иначе ни одна
+            // сделка не найдётся и отчёт молча покажет нули.
+            val indexByTime = candles.withIndex()
+                .associate { (i, candle) -> candle.time.take(16).replace('T', ' ') to i }
             val result = StrategyBacktest.run(
                 file.nameWithoutExtension,
                 candles,
@@ -111,6 +115,9 @@ class MarketRegimeReport {
         if (instruments == 0) {
             println("Режимы: ни у одного инструмента нет истории нужной длины.")
             return
+        }
+        check(overall.values.sumOf { it.trades } > 0) {
+            "Режимы: сделок не нашлось ни одной — разбор нечего показывать, и нули здесь были бы обманом."
         }
 
         println()
