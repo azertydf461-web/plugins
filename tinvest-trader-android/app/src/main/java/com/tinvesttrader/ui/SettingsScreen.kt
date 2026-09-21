@@ -396,6 +396,20 @@ private fun RiskSettingsSection(state: SettingsUiState, viewModel: SettingsViewM
             style = MaterialTheme.typography.bodySmall,
         )
 
+        if (state.strategyMode == "SIZING") {
+            NumberSetting(
+                label = "Базовый размер позиции, лотов",
+                value = state.baseLots.toDouble(),
+                onValueChange = { viewModel.setBaseLots(it) },
+            )
+            Text(
+                "Полный объём при всех пройденных фильтрах. Непройденный фильтр " +
+                    "уменьшает объём пропорционально, но не ниже одного лота — " +
+                    "дробить лот биржа не даёт.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         Text(
             "Таймфрейм бота",
             style = MaterialTheme.typography.titleMedium,

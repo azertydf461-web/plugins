@@ -34,7 +34,8 @@ class SberBacktestReport {
             return
         }
 
-        val summary = mutableListOf<BotBacktestResult>()
+        val blocking = mutableListOf<BotBacktestResult>()
+        val sizing = mutableListOf<BotBacktestResult>()
 
         files.forEach { file ->
             val candles = readCandles(file)
@@ -44,26 +45,84 @@ class SberBacktestReport {
                 println("Слишком мало свечей для прогона.")
                 return@forEach
             }
-            val result = StrategyBacktest.run(
+            // Две конфигурации на одних и тех же свечах: фильтры запрещают
+            // вход против фильтров, режущих объём. Исходная логика приходит
+            // третьей колонкой внутри каждого результата.
+            val block = StrategyBacktest.run(
                 intervalTitle = file.nameWithoutExtension,
                 candles = candles,
                 settings = BotBacktestSettings(pollEveryNBars = 1),
             )
-            if (result == null) {
+            val size = StrategyBacktest.run(
+                intervalTitle = file.nameWithoutExtension,
+                candles = candles,
+                settings = BotBacktestSettings(pollEveryNBars = 1, sizingMode = true),
+            )
+            if (block == null || size == null) {
                 println("Прогон не состоялся: истории не хватило.")
                 return@forEach
             }
-            printResult(result)
-            summary += result
+            printResult(size)
+            blocking += block
+            sizing += size
         }
 
-        printSummary(summary)
+        printComparison(blocking, sizing)
     }
 
     /**
-     * Сводка печатается последней: по двум десяткам бумаг подробные таблицы
-     * читать невозможно, а решение принимается именно по этим цифрам.
+     * Сравнение трёх стратегий на одних и тех же свечах. Вопрос эксперимента
+     * ровно один: дороже ли обходится отменённый вход, чем уменьшенный.
      */
+    private fun printComparison(
+        blocking: List<BotBacktestResult>,
+        sizing: List<BotBacktestResult>,
+    ) {
+        if (sizing.isEmpty()) return
+        println()
+        println("============ СВОДКА: объём против запрета ============")
+        println(
+            "бумага".padEnd(22) + "сдел".padStart(6) + "ОБЪЁМ".padStart(9) +
+                "запрет".padStart(9) + "исходн".padStart(9) + "куп-держ".padStart(10) +
+                "ср.сд".padStart(8) + "просад".padStart(8),
+        )
+        sizing.forEachIndexed { index, r ->
+            val b = blocking[index]
+            println(
+                r.intervalTitle.padEnd(22) +
+                    r.tradeCount.toString().padStart(6) +
+                    num(r.totalReturnPercent).padStart(9) +
+                    num(b.totalReturnPercent).padStart(9) +
+                    num(r.legacyTotalReturnPercent).padStart(9) +
+                    num(r.buyHoldReturnPercent).padStart(10) +
+                    num(r.expectancyPercent).padStart(8) +
+                    num(r.maxDrawdownPercent).padStart(8),
+            )
+        }
+
+        val sizeBeatsBlock = sizing.indices.count {
+            sizing[it].totalReturnPercent > blocking[it].totalReturnPercent
+        }
+        val sizeBeatsLegacy = sizing.count { it.totalReturnPercent > it.legacyTotalReturnPercent }
+        val sizeBeatsHold = sizing.count { it.totalReturnPercent > it.buyHoldReturnPercent }
+        val positive = sizing.count { it.expectancyPercent > 0 }
+        println()
+        println("Прогонов: ${sizing.size}, сделок всего: ${sizing.sumOf { it.tradeCount }}")
+        println("Объём лучше запрета: $sizeBeatsBlock из ${sizing.size}")
+        println("Объём лучше исходной логики: $sizeBeatsLegacy из ${sizing.size}")
+        println("Объём лучше «купить и держать»: $sizeBeatsHold из ${sizing.size}")
+        println("Положительное матожидание: $positive из ${sizing.size}")
+        println(
+            "Среднее матожидание: объём ${num(sizing.sumOf { it.expectancyPercent } / sizing.size)}%, " +
+                "запрет ${num(blocking.sumOf { it.expectancyPercent } / blocking.size)}%",
+        )
+        println(
+            "Средняя просадка: объём ${num(sizing.sumOf { it.maxDrawdownPercent } / sizing.size)}%, " +
+                "запрет ${num(blocking.sumOf { it.maxDrawdownPercent } / blocking.size)}%",
+        )
+    }
+
+    @Suppress("unused")
     private fun printSummary(results: List<BotBacktestResult>) {
         if (results.isEmpty()) return
         println()

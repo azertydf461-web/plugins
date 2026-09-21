@@ -92,6 +92,14 @@ class SecureTokenStore(context: Context) {
         get() = prefs.getString(KEY_STRATEGY, DEFAULT_STRATEGY) ?: DEFAULT_STRATEGY
         set(value) = prefs.edit().putString(KEY_STRATEGY, value).apply()
 
+    /**
+     * Базовый размер позиции в лотах. Нужен режиму, где фильтры режут объём:
+     * из одного лота треть не выкроить, и уменьшать было бы нечего.
+     */
+    var baseLots: Long
+        get() = prefs.getString(KEY_BASE_LOTS, null)?.toLongOrNull() ?: 3
+        set(value) = prefs.edit().putString(KEY_BASE_LOTS, value.toString()).apply()
+
     /** Подтягивать ли стоп вслед за ценой, пока позиция в прибыли. */
     var trailingStopEnabled: Boolean
         get() = prefs.getBoolean(KEY_TRAILING, true)
@@ -131,6 +139,7 @@ class SecureTokenStore(context: Context) {
         const val KEY_STOP_ORDER_ID = "protective_stop_order_id"
         const val KEY_STRATEGY = "strategy_mode"
         const val KEY_TRAILING = "trailing_stop_enabled"
+        const val KEY_BASE_LOTS = "base_lots"
         const val KEY_HIGH_WATER = "position_high_water"
         const val KEY_STOP_PRICE = "protective_stop_price"
         const val DEFAULT_STRATEGY = "TREND"

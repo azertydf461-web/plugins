@@ -128,7 +128,10 @@ class TradingEngine(
 
         return when (decision.signal) {
             Signal.BUY -> {
-                val verdict = riskManager.checkCanOpenPosition(currentLots, lotsPerOrder)
+                // Уверенность стратегии переводится в объём: слабый сигнал
+                // даёт неполную позицию, но сделка всё равно происходит.
+                val orderLots = orderLotsFor(decision)
+                val verdict = riskManager.checkCanOpenPosition(currentLots, orderLots)
                 if (!verdict.allowed) {
                     record(
                         figi = figi,
@@ -140,15 +143,15 @@ class TradingEngine(
                     )
                 } else {
                     val bought = executeOrder(
-                        accountId, figi, lotsPerOrder, OrderDirection.BUY,
-                        DecisionAction.BUY, "Покупаю $lotsPerOrder лот(ов)",
+                        accountId, figi, orderLots, OrderDirection.BUY,
+                        DecisionAction.BUY, "Покупаю $orderLots лот(ов)",
                         decision.reasoning, verdict.reasoning, indicators,
                     )
                     // Защита ставится сразу после покупки: незащищённая
                     // позиция не должна пережить даже один цикл бота.
                     if (bought.decisionAction == DecisionAction.BUY) {
                         val notes = ensureProtectiveStop(
-                            accountId, figi, currentLots + lotsPerOrder, lastPrice, candles,
+                            accountId, figi, currentLots + orderLots, lastPrice, candles,
                         )
                         record(
                             figi = figi,
@@ -385,6 +388,17 @@ class TradingEngine(
         val index = candles.indexOfLast { it.time == lastProcessedTime }
         if (index < 0) return DEFAULT_SCAN_BARS
         return (candles.size - 1 - index).coerceIn(1, MAX_SCAN_BARS)
+    }
+
+    /**
+     * Сколько лотов брать. Полная уверенность — базовый размер, неполная —
+     * пропорционально меньше, но не меньше одного лота: дробить лот биржа
+     * не даёт, а отменять сделку из-за округления бессмысленно.
+     */
+    private fun orderLotsFor(decision: StrategyDecision): Long {
+        val base = tokenStore.baseLots.coerceAtLeast(1)
+        if (decision.conviction >= 0.999) return base
+        return Math.round(base * decision.conviction).coerceIn(1L, base)
     }
 
     /** Запас истории под таймфрейм: с тройным запасом на ночь и выходные. */

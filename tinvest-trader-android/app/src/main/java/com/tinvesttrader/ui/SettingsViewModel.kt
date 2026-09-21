@@ -45,6 +45,7 @@ data class SettingsUiState(
     val protectiveStopEnabled: Boolean = true,
     val strategyMode: String = "TREND",
     val trailingStopEnabled: Boolean = true,
+    val baseLots: Long = 3,
 )
 
 /**
@@ -85,6 +86,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             protectiveStopEnabled = tokenStore.protectiveStopEnabled,
             strategyMode = tokenStore.strategyMode,
             trailingStopEnabled = tokenStore.trailingStopEnabled,
+            baseLots = tokenStore.baseLots,
         )
     }
 
@@ -116,6 +118,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun setStrategyMode(mode: String) {
         tokenStore.strategyMode = mode
+        reload()
+    }
+
+    fun setBaseLots(value: Double) {
+        tokenStore.baseLots = value.toLong().coerceAtLeast(1)
         reload()
     }
 

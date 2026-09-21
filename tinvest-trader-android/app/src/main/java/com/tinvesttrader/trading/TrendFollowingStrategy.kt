@@ -5,6 +5,9 @@ import com.tinvesttrader.data.Candle
 /** Результат одного фильтра: пропустил он сделку или нет и почему. */
 private data class FilterCheck(val name: String, val passed: Boolean, val reading: String)
 
+/** Что фильтры делают с сигналом: запрещают вход или уменьшают объём. */
+enum class FilterMode { BLOCK, SIZE }
+
 /**
  * Пересечение средних с фильтрами входа.
  *
@@ -20,6 +23,16 @@ private data class FilterCheck(val name: String, val passed: Boolean, val readin
  */
 class TrendFollowingStrategy(
     private val base: SmaCrossoverStrategy = SmaCrossoverStrategy(),
+    /**
+     * BLOCK — непройденный фильтр отменяет покупку. SIZE — покупка
+     * происходит всегда, но объём режется пропорционально числу пройденных
+     * фильтров: трендовая система зарабатывает одной-двумя крупными
+     * сделками, и фильтр, не пустивший в такую сделку, стоит дороже, чем
+     * весь сэкономленный им риск.
+     */
+    private val mode: FilterMode = FilterMode.BLOCK,
+    /** Минимальная доля объёма: даже на слабом сигнале сделка не исчезает. */
+    private val minConviction: Double = 0.34,
     private val trendPeriod: Int = 50,
     private val adxThreshold: Double = 20.0,
     private val rsiOverbought: Double = 70.0,
@@ -43,8 +56,17 @@ class TrendFollowingStrategy(
         }
 
         if (blocking.isEmpty()) {
-            reasoning += "Все фильтры пройдены — сигнал на покупку подтверждён."
+            reasoning += "Все фильтры пройдены — сигнал на покупку подтверждён, объём полный."
             return decision.copy(reasoning = reasoning)
+        }
+
+        if (mode == FilterMode.SIZE) {
+            val passed = checks.size - blocking.size
+            val conviction = maxOf(minConviction, passed.toDouble() / checks.size)
+            reasoning += "Не пройдено фильтров: ${blocking.joinToString(", ") { it.name.lowercase() }}."
+            reasoning += "Вход остаётся, но объёмом ${(conviction * 100).toInt()}% от полного: " +
+                "слабый сигнал уменьшает ставку, а не отменяет её."
+            return decision.copy(reasoning = reasoning, conviction = conviction)
         }
 
         reasoning += "Покупка отменена: ${blocking.joinToString(", ") { it.name.lowercase() }}."

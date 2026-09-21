@@ -50,6 +50,12 @@ data class BotBacktestSettings(
     val maxStopPercent: Double = 8.0,
     /** Фильтры входа: тренд, его сила, перегретость и размах свечей. */
     val useFilters: Boolean = true,
+    /**
+     * Фильтры режут объём вместо того, чтобы запрещать вход. Прибыль
+     * трендовой системы делают одна-две крупные сделки, поэтому отменённый
+     * вход стоит дороже, чем уменьшенный.
+     */
+    val sizingMode: Boolean = false,
     /** Подтягивать ли стоп вслед за ценой, пока сделка в прибыли. */
     val trailingStop: Boolean = true,
 )
@@ -121,6 +127,7 @@ object StrategyBacktest {
                 brokerStopOrder = false,
                 atrStop = false,
                 useFilters = false,
+                sizingMode = false,
                 trailingStop = false,
             ),
         )
@@ -200,8 +207,11 @@ object StrategyBacktest {
         candles: List<Candle>,
         settings: BotBacktestSettings,
     ): List<BotTrade> {
-        val strategy: Strategy =
-            if (settings.useFilters) TrendFollowingStrategy() else SmaCrossoverStrategy()
+        val strategy: Strategy = when {
+            !settings.useFilters -> SmaCrossoverStrategy()
+            settings.sizingMode -> TrendFollowingStrategy(mode = FilterMode.SIZE)
+            else -> TrendFollowingStrategy()
+        }
         val costPerTrade = (settings.commissionPercent + settings.spreadPercent) * 2
         val step = settings.pollEveryNBars.coerceAtLeast(1)
         val trades = mutableListOf<BotTrade>()
@@ -209,6 +219,7 @@ object StrategyBacktest {
         var entryBar = -1
         var entryPrice = 0.0
         var entryAtr = 0.0
+        var entryConviction = 1.0
         var stopPrice = 0.0
         var highWater = 0.0
         var lowSinceLastPoll = Double.MAX_VALUE
@@ -227,7 +238,10 @@ object StrategyBacktest {
                 // стопа, исполнение идёт по этому худшему открытию.
                 if (settings.brokerStopOrder && bar > entryBar && candle.low.toDouble() <= stopPrice) {
                     val fill = minOf(stopPrice, candle.open.toDouble())
-                    trades += trade(candles, entryBar, entryPrice, bar, fill, BotExitReason.STOP_LOSS, costPerTrade)
+                    trades += trade(
+                        candles, entryBar, entryPrice, bar, fill,
+                        BotExitReason.STOP_LOSS, costPerTrade, entryConviction,
+                    )
                     entryBar = -1
                     bar++
                     continue
@@ -248,6 +262,7 @@ object StrategyBacktest {
                     entryBar = bar + 1
                     entryPrice = fillPrice
                     entryAtr = Volatility.atr(window) ?: 0.0
+                    entryConviction = decision.conviction.coerceIn(0.0, 1.0)
                     highWater = fillPrice
                     lowSinceLastPoll = Double.MAX_VALUE
                     stopPrice = stopPriceFor(entryPrice, window, settings)
@@ -259,7 +274,7 @@ object StrategyBacktest {
             // Мягкий стоп: бот замечает просадку только проснувшись и
             // закрывается по следующей цене, какой бы она ни была.
             if (!settings.brokerStopOrder && bar > entryBar && lowSinceLastPoll <= stopPrice) {
-                trades += trade(candles, entryBar, entryPrice, bar + 1, fillPrice, BotExitReason.STOP_LOSS, costPerTrade)
+                trades += trade(candles, entryBar, entryPrice, bar + 1, fillPrice, BotExitReason.STOP_LOSS, costPerTrade, entryConviction)
                 entryBar = -1
                 bar++
                 continue
@@ -267,7 +282,7 @@ object StrategyBacktest {
             lowSinceLastPoll = Double.MAX_VALUE
 
             if (decision.signal == Signal.SELL && bar > entryBar) {
-                trades += trade(candles, entryBar, entryPrice, bar + 1, fillPrice, BotExitReason.SIGNAL, costPerTrade)
+                trades += trade(candles, entryBar, entryPrice, bar + 1, fillPrice, BotExitReason.SIGNAL, costPerTrade, entryConviction)
                 entryBar = -1
                 bar++
                 continue
@@ -285,7 +300,7 @@ object StrategyBacktest {
             val exitPrice = candles.last().close.toDouble()
             trades += trade(
                 candles, entryBar, entryPrice, candles.size - 1, exitPrice,
-                BotExitReason.END, costPerTrade,
+                BotExitReason.END, costPerTrade, entryConviction,
             )
         }
         return trades
@@ -299,13 +314,16 @@ object StrategyBacktest {
         exitPrice: Double,
         reason: BotExitReason,
         costPerTrade: Double,
+        conviction: Double,
     ): BotTrade = BotTrade(
         entryTime = shortTime(candles[entryBar].time),
         entryPrice = entryPrice,
         exitTime = shortTime(candles[exitBar.coerceAtMost(candles.size - 1)].time),
         exitPrice = exitPrice,
         reason = reason,
-        resultPercent = (exitPrice - entryPrice) / entryPrice * 100 - costPerTrade,
+        // Половинным объёмом получаешь половину движения и платишь половину
+        // комиссии, поэтому весь результат сделки масштабируется долей.
+        resultPercent = ((exitPrice - entryPrice) / entryPrice * 100 - costPerTrade) * conviction,
         barsHeld = exitBar - entryBar,
     )
 
@@ -393,7 +411,11 @@ object StrategyBacktest {
                 "Сделки считаются по открытию следующей свечи, а не по реальной цене исполнения.",
         )
         add(
-            if (settings.useFilters) {
+            if (settings.useFilters && settings.sizingMode) {
+                "Фильтры не запрещают вход, а режут объём: непройденный фильтр уменьшает " +
+                    "долю позиции, минимум треть. Пороги (ADX 20, RSI 70, средняя 50) заданы " +
+                    "заранее и не подбирались под эту бумагу."
+            } else if (settings.useFilters) {
                 "Фильтры входа заданы заранее (ADX 20, RSI 70, длинная средняя 50) и не " +
                     "подбирались под эту бумагу. Подбор дал бы результат красивее, но " +
                     "бесполезнее: так настраивают стратегию на прошлое, а торгуют в будущем."

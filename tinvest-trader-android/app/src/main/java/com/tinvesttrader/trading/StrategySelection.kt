@@ -11,6 +11,14 @@ enum class StrategyMode(val key: String, val title: String, val description: Str
             "средней, средняя растёт, тренд подтверждён ADX, рынок не перегрет и размах " +
             "свечей окупает издержки. Выходы фильтрами не ограничиваются никогда.",
     ),
+    SIZING(
+        key = "SIZING",
+        title = "Фильтры режут объём",
+        description = "Покупка происходит на каждом пересечении, но непройденный фильтр " +
+            "уменьшает объём позиции, минимум до трети. Так слабый сигнал снижает риск, " +
+            "а не отменяет сделку: прибыль трендовой системы делают одна-две крупные " +
+            "сделки, и пропустить такую дороже, чем войти в неё неполным объёмом.",
+    ),
     SMA(
         key = "SMA",
         title = "Голое пересечение средних",
@@ -32,5 +40,6 @@ enum class StrategyMode(val key: String, val title: String, val description: Str
 fun strategyFor(store: SecureTokenStore): Strategy =
     when (StrategyMode.fromKey(store.strategyMode)) {
         StrategyMode.TREND -> TrendFollowingStrategy()
+        StrategyMode.SIZING -> TrendFollowingStrategy(mode = FilterMode.SIZE)
         StrategyMode.SMA -> SmaCrossoverStrategy()
     }
