@@ -177,6 +177,19 @@ jobs:
               exit 1
             }
 
+      - name: Где у системы край — разбор по режимам рынка
+        working-directory: tinvest-trader-android
+        run: |
+          export REGIME_DATA_DIR="$PWD/app/build/backtest-data"
+          set -o pipefail
+          gradle :app:testDebugUnitTest \
+            --tests 'com.tinvesttrader.trading.MarketRegimeReport' \
+            --no-daemon 2>&1 | tee /tmp/regime.log || {
+              echo "=== ошибки компиляции ==="
+              grep -E "^e: " /tmp/regime.log || true
+              exit 1
+            }
+
       - name: Что удалось скачать
         if: always()
         run: cat /tmp/fetch.log

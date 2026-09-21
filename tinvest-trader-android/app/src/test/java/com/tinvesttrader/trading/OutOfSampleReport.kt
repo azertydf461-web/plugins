@@ -1,10 +1,7 @@
 package com.tinvesttrader.trading
 
-import com.tinvesttrader.data.Candle
-import com.tinvesttrader.data.Quotation
 import java.io.File
 import java.util.Locale
-import kotlin.math.floor
 import kotlin.math.max
 import org.junit.Test
 
@@ -38,7 +35,7 @@ class OutOfSampleReport {
 
     private fun report(dataset: File) {
         val data = dataset.listFiles { file -> file.extension == "csv" }
-            ?.associate { it.nameWithoutExtension to readCandles(it) }
+            ?.associate { it.nameWithoutExtension to readCandlesCsv(it) }
             ?.filterValues { it.size >= 400 }
             .orEmpty()
 
@@ -66,16 +63,25 @@ class OutOfSampleReport {
                 PortfolioSettings(maxPositions = slots, buyHoldTaxRatePercent = 13.0),
             ) ?: return@forEach
             hold = hold ?: result
-            println(
-                slots.toString().padEnd(9) +
-                    result.trades.toString().padStart(8) +
-                    num(result.totalReturnPercent).padStart(10) +
-                    num(result.maxDrawdownPercent).padStart(9) +
-                    num(result.totalReturnPercent / max(1.0, result.maxDrawdownPercent)).padStart(12) +
-                    num(result.taxPaidPercent).padStart(8) +
-                    num(result.marginPaidPercent).padStart(8) +
-                    num(result.averageExposurePercent).padStart(9),
-            )
+            println(row(slots.toString(), result))
+        }
+
+        // То же самое на счёте, освобождённом от налога на доход. Налог —
+        // самая крупная издержка активной торговли, и без него сравнение с
+        // пассивом становится другим: это отдельный прогон, а не поправка к
+        // предыдущему, потому что налог меняет размер позиции на всём пути.
+        println("без НДФЛ — счёт с освобождением от налога:")
+        listOf(3, 5, 10).forEach { slots ->
+            if (slots > data.size) return@forEach
+            val result = PortfolioBacktest.run(
+                data,
+                PortfolioSettings(
+                    maxPositions = slots,
+                    taxRatePercent = 0.0,
+                    buyHoldTaxRatePercent = 13.0,
+                ),
+            ) ?: return@forEach
+            println(row(slots.toString(), result))
         }
 
         hold?.let {
@@ -87,48 +93,19 @@ class OutOfSampleReport {
             println("То же с НДФЛ, если льготы нет: ${num(it.buyHoldAfterTaxReturnPercent)}%")
             println("Торговых дней: ${it.days}")
         }
-
-        // Тот же набор без налога — чтобы было видно, сколько именно
-        // активная торговля отдаёт государству по сравнению с пассивом.
-        val slots = minOf(5, data.size)
-        val gross = PortfolioBacktest.run(
-            data,
-            PortfolioSettings(maxPositions = slots, taxRatePercent = 0.0),
-        )
-        val net = PortfolioBacktest.run(data, PortfolioSettings(maxPositions = slots))
-        if (gross != null && net != null) {
-            println(
-                "Вклад НДФЛ при $slots позициях: без налога ${num(gross.totalReturnPercent)}%, " +
-                    "с налогом ${num(net.totalReturnPercent)}% " +
-                    "(разница ${num(gross.totalReturnPercent - net.totalReturnPercent)} п.п.)",
-            )
-        }
     }
+
+    private fun row(label: String, result: PortfolioResult): String =
+        label.padEnd(9) +
+            result.trades.toString().padStart(8) +
+            num(result.totalReturnPercent).padStart(10) +
+            num(result.maxDrawdownPercent).padStart(9) +
+            num(result.totalReturnPercent / max(1.0, result.maxDrawdownPercent)).padStart(12) +
+            num(result.taxPaidPercent).padStart(8) +
+            num(result.marginPaidPercent).padStart(8) +
+            num(result.averageExposurePercent).padStart(9)
 
     private fun num(value: Double): String = String.format(Locale.US, "%.2f", value)
 
-    private fun readCandles(file: File): List<Candle> = file.readLines()
-        .drop(1)
-        .mapNotNull { line ->
-            val parts = line.split(',')
-            if (parts.size < 6) return@mapNotNull null
-            val open = parts[0].toDoubleOrNull() ?: return@mapNotNull null
-            val high = parts[1].toDoubleOrNull() ?: return@mapNotNull null
-            val low = parts[2].toDoubleOrNull() ?: return@mapNotNull null
-            val close = parts[3].toDoubleOrNull() ?: return@mapNotNull null
-            if (close <= 0 || high <= 0 || low <= 0) return@mapNotNull null
-            Candle(
-                open = open.toQuotation(),
-                high = high.toQuotation(),
-                low = low.toQuotation(),
-                close = close.toQuotation(),
-                volume = parts[4].substringBefore('.'),
-                time = parts[5].trim(),
-            )
-        }
 
-    private fun Double.toQuotation(): Quotation {
-        val units = floor(this).toLong()
-        return Quotation(units = units.toString(), nano = ((this - units) * 1_000_000_000).toInt())
-    }
 }

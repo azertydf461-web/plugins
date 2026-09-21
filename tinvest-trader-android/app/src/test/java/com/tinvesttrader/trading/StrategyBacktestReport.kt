@@ -1,10 +1,8 @@
 package com.tinvesttrader.trading
 
 import com.tinvesttrader.data.Candle
-import com.tinvesttrader.data.Quotation
 import java.io.File
 import java.util.Locale
-import kotlin.math.floor
 import kotlin.math.max
 import org.junit.Test
 
@@ -41,7 +39,7 @@ class StrategyBacktestReport {
             return
         }
 
-        val candlesByName = files.associate { it.nameWithoutExtension to readCandles(it) }
+        val candlesByName = files.associate { it.nameWithoutExtension to readCandlesCsv(it) }
             .filterValues { it.size >= 400 }
         val rows = files.mapNotNull { file -> runOne(file) }
         if (rows.isEmpty()) {
@@ -121,7 +119,7 @@ class StrategyBacktestReport {
         result.totalReturnPercent / max(1.0, result.maxDrawdownPercent)
 
     private fun runOne(file: File): Row? {
-        val candles = readCandles(file)
+        val candles = readCandlesCsv(file)
         if (candles.size < 400) {
             println("${file.nameWithoutExtension}: ${candles.size} свечей — мало, пропуск.")
             return null
@@ -206,29 +204,5 @@ class StrategyBacktestReport {
 
     private fun num(value: Double): String = String.format(Locale.US, "%.2f", value)
 
-    /** CSV: open,high,low,close,volume,begin — ровно то, что отдают источники. */
-    private fun readCandles(file: File): List<Candle> = file.readLines()
-        .drop(1)
-        .mapNotNull { line ->
-            val parts = line.split(',')
-            if (parts.size < 6) return@mapNotNull null
-            val open = parts[0].toDoubleOrNull() ?: return@mapNotNull null
-            val high = parts[1].toDoubleOrNull() ?: return@mapNotNull null
-            val low = parts[2].toDoubleOrNull() ?: return@mapNotNull null
-            val close = parts[3].toDoubleOrNull() ?: return@mapNotNull null
-            if (close <= 0 || high <= 0 || low <= 0) return@mapNotNull null
-            Candle(
-                open = open.toQuotation(),
-                high = high.toQuotation(),
-                low = low.toQuotation(),
-                close = close.toQuotation(),
-                volume = parts[4].substringBefore('.'),
-                time = parts[5].trim(),
-            )
-        }
 
-    private fun Double.toQuotation(): Quotation {
-        val units = floor(this).toLong()
-        return Quotation(units = units.toString(), nano = ((this - units) * 1_000_000_000).toInt())
-    }
 }

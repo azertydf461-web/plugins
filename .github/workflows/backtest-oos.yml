@@ -5,6 +5,9 @@ name: backtest-oos
 #   novye-instrumenty — отраслевые индексы Мосбиржи и мировые индексы,
 #     не участвовавшие в подборе, плюс индексы полной доходности
 #     (MCFTR, RTSTR, RGBITR), где дивиденды и купоны входят в саму цену;
+#   novye-instrumenty-rub — тот же набор, но мировые индексы пересчитаны в
+#     рубли по дневным курсам: сравнивать доходность в евро, вонах и реалах
+#     с рублёвым пассивом нельзя;
 #   ranniy-period — те же индексы Мосбиржи, но десятилетие до окна подбора.
 
 on:
@@ -12,6 +15,7 @@ on:
   push:
     paths:
       - '.github/workflows/backtest-oos.yml'
+      - '.github/scripts/index-to-rub.py'
       - 'tinvest-trader-android/app/src/test/**'
 
 jobs:
@@ -113,6 +117,11 @@ jobs:
           for i in IMOEX RTSI MOEXOG MOEXMM MOEXFN MCFTR RTSTR; do
             moex index "$i" "$EARLY_FROM" "$EARLY_TO" "$EARLY/rf-indeks__$i.csv"
           done
+
+          echo "=== Тот же набор в рублях ==="
+          python3 .github/scripts/index-to-rub.py \
+            "$NEW" "$ROOT/novye-instrumenty-rub" "$RECENT_FROM" "$RECENT_TO" \
+            || { echo "Пересчёт в рубли не удался"; rm -rf "$ROOT/novye-instrumenty-rub"; }
 
           echo "Новых инструментов: $(ls -1 "$NEW" | wc -l), раннего периода: $(ls -1 "$EARLY" | wc -l)"
 
