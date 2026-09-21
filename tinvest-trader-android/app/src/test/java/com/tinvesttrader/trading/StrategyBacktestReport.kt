@@ -5,6 +5,7 @@ import com.tinvesttrader.data.Quotation
 import java.io.File
 import java.util.Locale
 import kotlin.math.floor
+import kotlin.math.max
 import org.junit.Test
 
 /**
@@ -40,6 +41,8 @@ class StrategyBacktestReport {
             return
         }
 
+        val candlesByName = files.associate { it.nameWithoutExtension to readCandles(it) }
+            .filterValues { it.size >= 400 }
         val rows = files.mapNotNull { file -> runOne(file) }
         if (rows.isEmpty()) {
             println("BACKTEST: ни один инструмент не дал достаточной истории.")
@@ -50,7 +53,72 @@ class StrategyBacktestReport {
             printGroup(assetClass, group)
         }
         printOverall(rows)
+        printPortfolio(candlesByName)
     }
+
+    /**
+     * Портфель на тех же сделках. Одиночные прогоны дали край в доли процента
+     * при разбросе итогов от минус сорока до плюс шестидесяти процентов —
+     * вопрос в том, собирается ли из этих сделок работающее целое, когда
+     * капитал распределён, а не поставлен на один инструмент.
+     */
+    private fun printPortfolio(data: Map<String, List<Candle>>) {
+        if (data.size < 5) return
+        println()
+        println("============ ПОРТФЕЛЬ (пробой канала) ============")
+        println(
+            "позиций".padEnd(10) + "сделок".padStart(8) + "итог".padStart(10) +
+                "просад".padStart(9) + "итог/просад".padStart(12) +
+                "прибыльн".padStart(10) + "ср.сд".padStart(8) + "в рынке".padStart(9),
+        )
+
+        var benchmark: PortfolioResult? = null
+        listOf(1, 3, 5, 10, 20, data.size).distinct().forEach { slots ->
+            val result = PortfolioBacktest.run(data, PortfolioSettings(maxPositions = slots)) ?: return@forEach
+            benchmark = benchmark ?: result
+            println(
+                slots.toString().padEnd(10) +
+                    result.trades.toString().padStart(8) +
+                    num(result.totalReturnPercent).padStart(10) +
+                    num(result.maxDrawdownPercent).padStart(9) +
+                    num(ratio(result)).padStart(12) +
+                    num(result.winRatePercent).padStart(10) +
+                    num(result.expectancyPercent).padStart(8) +
+                    num(result.averageExposurePercent).padStart(9),
+            )
+        }
+
+        benchmark?.let {
+            println()
+            println(
+                "Равновзвешенное «купить и держать» по той же корзине: " +
+                    "итог ${num(it.buyHoldReturnPercent)}%, просадка ${num(it.buyHoldMaxDrawdownPercent)}%, " +
+                    "итог/просадка ${num(it.buyHoldReturnPercent / max(1.0, it.buyHoldMaxDrawdownPercent))}",
+            )
+            println("Инструментов в корзине: ${it.instruments}, торговых дней: ${it.days}")
+        }
+
+        // Портфели внутри одного класса: диверсификация по коррелированным
+        // инструментам работает хуже, и это должно быть видно отдельно.
+        println()
+        println("Портфели по классам (5 позиций):")
+        data.keys.map { it.substringBefore("__") }.distinct().sorted().forEach { assetClass ->
+            val subset = data.filterKeys { it.startsWith("$assetClass__") }
+            if (subset.size < 5) return@forEach
+            val result = PortfolioBacktest.run(subset, PortfolioSettings(maxPositions = 5)) ?: return@forEach
+            println(
+                "  " + assetClass.padEnd(14) +
+                    "итог ${num(result.totalReturnPercent)}%".padEnd(18) +
+                    "просадка ${num(result.maxDrawdownPercent)}%".padEnd(20) +
+                    "удержание ${num(result.buyHoldReturnPercent)}% " +
+                    "при просадке ${num(result.buyHoldMaxDrawdownPercent)}%",
+            )
+        }
+    }
+
+    /** Доходность на единицу просадки — то, чем системы вообще сравнивают. */
+    private fun ratio(result: PortfolioResult): Double =
+        result.totalReturnPercent / max(1.0, result.maxDrawdownPercent)
 
     private fun runOne(file: File): Row? {
         val candles = readCandles(file)
