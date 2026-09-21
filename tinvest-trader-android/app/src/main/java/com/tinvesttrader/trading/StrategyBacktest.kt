@@ -48,6 +48,10 @@ data class BotBacktestSettings(
     val atrStop: Boolean = true,
     val atrMultiplier: Double = 2.0,
     val maxStopPercent: Double = 8.0,
+    /** Фильтры входа: тренд, его сила, перегретость и размах свечей. */
+    val useFilters: Boolean = true,
+    /** Подтягивать ли стоп вслед за ценой, пока сделка в прибыли. */
+    val trailingStop: Boolean = true,
 )
 
 data class BotBacktestResult(
@@ -95,7 +99,6 @@ data class BotBacktestResult(
 object StrategyBacktest {
 
     fun run(
-        strategy: SmaCrossoverStrategy,
         intervalTitle: String,
         candles: List<Candle>,
         settings: BotBacktestSettings = BotBacktestSettings(),
@@ -103,18 +106,23 @@ object StrategyBacktest {
         val warmup = settings.windowBars
         if (candles.size < warmup + 40) return null
 
-        val trades = simulate(strategy, candles, settings)
+        val trades = simulate(candles, settings)
         val idealTrades = if (settings.pollEveryNBars == 1) {
             trades
         } else {
-            simulate(strategy, candles, settings.copy(pollEveryNBars = 1))
+            simulate(candles, settings.copy(pollEveryNBars = 1))
         }
         // Старое поведение на тех же свечах: так видно, что именно дали
         // досмотр пропущенных свечей и стоп-заявка у брокера.
         val legacyTrades = simulate(
-            strategy,
             candles,
-            settings.copy(scanMissedBars = false, brokerStopOrder = false, atrStop = false),
+            settings.copy(
+                scanMissedBars = false,
+                brokerStopOrder = false,
+                atrStop = false,
+                useFilters = false,
+                trailingStop = false,
+            ),
         )
         var legacyEquity = 1.0
         legacyTrades.forEach { legacyEquity *= (1 + it.resultPercent / 100) }
@@ -183,10 +191,11 @@ object StrategyBacktest {
     }
 
     private fun simulate(
-        strategy: SmaCrossoverStrategy,
         candles: List<Candle>,
         settings: BotBacktestSettings,
     ): List<BotTrade> {
+        val strategy: Strategy =
+            if (settings.useFilters) TrendFollowingStrategy() else SmaCrossoverStrategy()
         val costPerTrade = (settings.commissionPercent + settings.spreadPercent) * 2
         val trades = mutableListOf<BotTrade>()
         val step = settings.pollEveryNBars.coerceAtLeast(1)
@@ -194,6 +203,8 @@ object StrategyBacktest {
         var entryBar = -1
         var entryPrice = 0.0
         var stopPrice = 0.0
+        var entryAtr = 0.0
+        var highWater = 0.0
         var poll = settings.windowBars
 
         while (poll < candles.size - 1) {
@@ -206,10 +217,23 @@ object StrategyBacktest {
                 if (decision.signal == Signal.BUY && fillPrice > 0) {
                     entryBar = poll + 1
                     entryPrice = fillPrice
+                    entryAtr = Volatility.atr(window) ?: 0.0
+                    highWater = fillPrice
                     stopPrice = stopPriceFor(entryPrice, window, settings)
                 }
                 poll += step
                 continue
+            }
+
+            if (settings.trailingStop && entryAtr > 0) {
+                // Стоп подтягивается от максимума, достигнутого с входа, и
+                // только вверх: прибыльная сделка не должна снова стать
+                // убыточной, но и расширять риск подтягивание не может.
+                highWater = maxOf(
+                    highWater,
+                    (entryBar..minOf(poll, candles.size - 1)).maxOf { candles[it].high.toDouble() },
+                )
+                stopPrice = maxOf(stopPrice, highWater - settings.atrMultiplier * entryAtr)
             }
 
             if (settings.brokerStopOrder) {
@@ -359,6 +383,22 @@ object StrategyBacktest {
             "Учтены комиссия и спред, но не проскальзывание, частичное исполнение и налог. " +
                 "Сделки считаются по открытию следующей свечи, а не по реальной цене исполнения.",
         )
+        add(
+            if (settings.useFilters) {
+                "Фильтры входа заданы заранее (ADX 20, RSI 70, длинная средняя 50) и не " +
+                    "подбирались под эту бумагу. Подбор дал бы результат красивее, но " +
+                    "бесполезнее: так настраивают стратегию на прошлое, а торгуют в будущем."
+            } else {
+                "Фильтры входа выключены: покупка на каждом пересечении, включая те, что " +
+                    "случились в боковике."
+            },
+        )
+        if (settings.trailingStop) {
+            add(
+                "Подтянутый стоп считается по закрытым свечам: вживую цена может " +
+                    "сходить к нему и внутри свечи, и тогда выход окажется раньше.",
+            )
+        }
         add("Шорт не моделируется: бот только покупает и закрывает позицию, как и вживую.")
         if (tradeCount in 10..29) {
             add("Сделок $tradeCount — мало: пара удачных исходов заметно двигает всю статистику.")

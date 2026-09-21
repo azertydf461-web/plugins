@@ -12,6 +12,7 @@ import com.tinvesttrader.trading.BotBacktestSettings
 import com.tinvesttrader.trading.LedgerStats
 import com.tinvesttrader.trading.RiskManagerHolder
 import com.tinvesttrader.trading.StrategyBacktest
+import com.tinvesttrader.trading.StrategyMode
 import com.tinvesttrader.trading.TradeLedger
 import com.tinvesttrader.trading.SmaCrossoverStrategy
 import com.tinvesttrader.trading.TradingEngine
@@ -109,10 +110,17 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
                 _backtest.value = _backtest.value.copy(stage = "Прогоняю ${candles.size} свечей...")
                 withContext(Dispatchers.Default) {
                     StrategyBacktest.run(
-                        strategy = SmaCrossoverStrategy(),
                         intervalTitle = range.title,
                         candles = candles,
-                        settings = BotBacktestSettings(pollEveryNBars = range.pollEveryNBars),
+                        settings = BotBacktestSettings(
+                            pollEveryNBars = range.pollEveryNBars,
+                            useFilters = StrategyMode.fromKey(tokenStore.strategyMode) == StrategyMode.TREND,
+                            trailingStop = tokenStore.trailingStopEnabled,
+                            atrStop = tokenStore.stopMode == "ATR",
+                            atrMultiplier = tokenStore.atrMultiplier,
+                            stopLossPercent = tokenStore.stopLossPercent,
+                            brokerStopOrder = tokenStore.protectiveStopEnabled,
+                        ),
                     )
                 } to candles.size
             }.onSuccess { (result, bars) ->
@@ -173,7 +181,7 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
             _uiState.value = _uiState.value.copy(checkInProgress = true, statusMessage = "Анализирую рынок...")
             val engine = TradingEngine(
                 repository = repository,
-                strategy = SmaCrossoverStrategy(),
+                strategy = strategyFor(tokenStore),
                 riskManager = RiskManagerHolder.configure(RiskManagerHolder.limitsFrom(tokenStore)),
                 tokenStore = tokenStore,
                 journal = journal,

@@ -256,16 +256,18 @@ class TradingEngine(
         }
         if (lots <= 0 || entryPrice <= 0) return emptyList()
 
-        val level = riskManager.stopLevelFor(entryPrice, Volatility.atr(candles))
+        val atr = Volatility.atr(candles)
+        val level = riskManager.stopLevelFor(entryPrice, atr)
         val existing = runCatching { repository.getStopOrders(accountId) }.getOrNull()
         val alive = existing?.firstOrNull { it.figi == figi || it.stopOrderId == tokenStore.protectiveStopOrderId }
 
         if (alive != null) {
             tokenStore.protectiveStopOrderId = alive.stopOrderId
             if (tokenStore.protectiveStopPrice <= 0) tokenStore.protectiveStopPrice = level.price
+            val trailed = trailStopIfPossible(accountId, figi, lots, entryPrice, candles, atr)
             return listOf(
                 "Защитная стоп-заявка у брокера активна: ${fmt(tokenStore.protectiveStopPrice)}.",
-            )
+            ) + trailed
         }
 
         return runCatching {
@@ -274,6 +276,7 @@ class TradingEngine(
             onSuccess = { id ->
                 tokenStore.protectiveStopOrderId = id
                 tokenStore.protectiveStopPrice = level.price
+                tokenStore.positionHighWaterPrice = entryPrice
                 listOf(
                     level.explanation,
                     "Выставлена стоп-заявка у брокера на ${fmt(level.price)} " +
@@ -297,12 +300,71 @@ class TradingEngine(
         )
     }
 
+    /**
+     * Подтягивает стоп вслед за ценой: уровень отсчитывается от максимума,
+     * достигнутого с момента входа. Так прибыльная сделка не превращается
+     * обратно в убыточную, а неудачная закрывается там же, где и раньше —
+     * стоп двигается только вверх.
+     */
+    private suspend fun trailStopIfPossible(
+        accountId: String,
+        figi: String,
+        lots: Long,
+        entryPrice: Double,
+        candles: List<Candle>,
+        atr: Double?,
+    ): List<String> {
+        if (!tokenStore.trailingStopEnabled || atr == null || atr <= 0) return emptyList()
+
+        val recentHigh = candles.takeLast(TRAIL_WINDOW_BARS).maxOfOrNull { it.high.toDouble() } ?: return emptyList()
+        val highWater = maxOf(tokenStore.positionHighWaterPrice, recentHigh, entryPrice)
+        tokenStore.positionHighWaterPrice = highWater
+
+        val multiplier = riskManager.activeLimits.atrMultiplier
+        val candidate = highWater - multiplier * atr
+        val currentStop = tokenStore.protectiveStopPrice
+        // Двигаем не на каждую копейку: перевыставление заявки — два запроса
+        // к брокеру, и дёргать их из-за шума бессмысленно.
+        if (candidate <= currentStop + atr * TRAIL_STEP_ATR) return emptyList()
+
+        val orderId = tokenStore.protectiveStopOrderId
+        if (orderId != null) {
+            val cancelled = runCatching { repository.cancelStopOrder(accountId, orderId) }
+            if (cancelled.isFailure) {
+                return listOf(
+                    "Стоп подтянуть не удалось: старую заявку не сняли " +
+                        "(${cancelled.exceptionOrNull()?.message}). Прежний стоп остаётся в силе.",
+                )
+            }
+        }
+
+        return runCatching { repository.placeProtectiveStop(accountId, figi, lots, candidate) }.fold(
+            onSuccess = { id ->
+                tokenStore.protectiveStopOrderId = id
+                tokenStore.protectiveStopPrice = candidate
+                listOf(
+                    "Стоп подтянут с ${fmt(currentStop)} до ${fmt(candidate)}: цена доходила " +
+                        "до ${fmt(highWater)}, стоп держится на ${fmt(multiplier)} x ATR ниже максимума.",
+                )
+            },
+            onFailure = { error ->
+                tokenStore.protectiveStopOrderId = null
+                listOf(
+                    "Стоп подтянуть не удалось: брокер не принял новую заявку (${error.message}). " +
+                        "Позиция осталась без биржевой заявки — сработает только мягкий стоп " +
+                        "${fmt(currentStop)} на очередной проверке.",
+                )
+            },
+        )
+    }
+
     /** Снимает защитную заявку перед закрытием позиции, чтобы она не выстрелила потом. */
     private suspend fun cancelProtectiveStop(accountId: String): List<String> {
         val id = tokenStore.protectiveStopOrderId ?: return emptyList()
         val result = runCatching { repository.cancelStopOrder(accountId, id) }
         tokenStore.protectiveStopOrderId = null
         tokenStore.protectiveStopPrice = 0.0
+        tokenStore.positionHighWaterPrice = 0.0
         return listOf(
             if (result.isSuccess) {
                 "Защитная стоп-заявка снята."
@@ -393,6 +455,8 @@ class TradingEngine(
 
     private companion object {
         const val BARS_WANTED = 120
+        const val TRAIL_WINDOW_BARS = 20
+        const val TRAIL_STEP_ATR = 0.5
         const val MAX_SCAN_BARS = 20
         const val DEFAULT_SCAN_BARS = 5
     }

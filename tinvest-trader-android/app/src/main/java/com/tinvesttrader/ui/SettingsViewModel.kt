@@ -43,6 +43,8 @@ data class SettingsUiState(
     val stopLossPercent: Double = 3.0,
     val atrMultiplier: Double = 2.0,
     val protectiveStopEnabled: Boolean = true,
+    val strategyMode: String = "TREND",
+    val trailingStopEnabled: Boolean = true,
 )
 
 /**
@@ -81,6 +83,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             stopLossPercent = tokenStore.stopLossPercent,
             atrMultiplier = tokenStore.atrMultiplier,
             protectiveStopEnabled = tokenStore.protectiveStopEnabled,
+            strategyMode = tokenStore.strategyMode,
+            trailingStopEnabled = tokenStore.trailingStopEnabled,
         )
     }
 
@@ -107,6 +111,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun setAtrMultiplier(value: Double) {
         tokenStore.atrMultiplier = value
+        reload()
+    }
+
+    fun setStrategyMode(mode: String) {
+        tokenStore.strategyMode = mode
+        reload()
+    }
+
+    fun setTrailingStopEnabled(enabled: Boolean) {
+        tokenStore.trailingStopEnabled = enabled
         reload()
     }
 

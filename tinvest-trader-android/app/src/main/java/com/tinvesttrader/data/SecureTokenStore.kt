@@ -87,6 +87,21 @@ class SecureTokenStore(context: Context) {
         get() = prefs.getString(KEY_STOP_ORDER_ID, null)
         set(value) = prefs.edit().putString(KEY_STOP_ORDER_ID, value).apply()
 
+    /** "TREND" — пересечение с фильтрами входа, "SMA" — голое пересечение. */
+    var strategyMode: String
+        get() = prefs.getString(KEY_STRATEGY, DEFAULT_STRATEGY) ?: DEFAULT_STRATEGY
+        set(value) = prefs.edit().putString(KEY_STRATEGY, value).apply()
+
+    /** Подтягивать ли стоп вслед за ценой, пока позиция в прибыли. */
+    var trailingStopEnabled: Boolean
+        get() = prefs.getBoolean(KEY_TRAILING, true)
+        set(value) = prefs.edit().putBoolean(KEY_TRAILING, value).apply()
+
+    /** Максимум цены с момента входа — от него отсчитывается подтянутый стоп. */
+    var positionHighWaterPrice: Double
+        get() = prefs.getString(KEY_HIGH_WATER, null)?.toDoubleOrNull() ?: 0.0
+        set(value) = prefs.edit().putString(KEY_HIGH_WATER, value.toString()).apply()
+
     /** Цена выставленного стопа — порог для проверки в цикле бота. */
     var protectiveStopPrice: Double
         get() = prefs.getString(KEY_STOP_PRICE, null)?.toDoubleOrNull() ?: 0.0
@@ -114,7 +129,11 @@ class SecureTokenStore(context: Context) {
         const val KEY_ATR_MULTIPLIER = "atr_multiplier"
         const val KEY_PROTECTIVE_STOP = "protective_stop_enabled"
         const val KEY_STOP_ORDER_ID = "protective_stop_order_id"
+        const val KEY_STRATEGY = "strategy_mode"
+        const val KEY_TRAILING = "trailing_stop_enabled"
+        const val KEY_HIGH_WATER = "position_high_water"
         const val KEY_STOP_PRICE = "protective_stop_price"
+        const val DEFAULT_STRATEGY = "TREND"
         const val KEY_LAST_CANDLE = "last_processed_candle_time"
         const val DEFAULT_INTERVAL = "CANDLE_INTERVAL_15_MIN"
         const val DEFAULT_STOP_MODE = "ATR"

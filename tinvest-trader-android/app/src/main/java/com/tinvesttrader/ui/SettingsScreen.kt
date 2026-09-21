@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tinvesttrader.data.CheckStatus
 import com.tinvesttrader.data.DiagnosticStep
+import com.tinvesttrader.trading.StrategyMode
 import com.tinvesttrader.data.InstrumentCategory
 
 private const val LIVE_CONFIRMATION_PHRASE = "ТОРГОВАТЬ РЕАЛЬНЫМИ ДЕНЬГАМИ"
@@ -377,6 +378,25 @@ private fun RiskSettingsSection(state: SettingsUiState, viewModel: SettingsViewM
     Column(Modifier.padding(top = 16.dp)) {
         HorizontalDivider()
         Text(
+            "Стратегия",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 12.dp),
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StrategyMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = state.strategyMode == mode.key,
+                    onClick = { viewModel.setStrategyMode(mode.key) },
+                    label = { Text(mode.title) },
+                )
+            }
+        }
+        Text(
+            StrategyMode.fromKey(state.strategyMode).description,
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        Text(
             "Таймфрейм бота",
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 12.dp),
@@ -450,6 +470,23 @@ private fun RiskSettingsSection(state: SettingsUiState, viewModel: SettingsViewM
                 onCheckedChange = { viewModel.setProtectiveStopEnabled(it) },
             )
         }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Подтягивать стоп за ценой", style = MaterialTheme.typography.titleSmall)
+            Switch(
+                checked = state.trailingStopEnabled,
+                onCheckedChange = { viewModel.setTrailingStopEnabled(it) },
+            )
+        }
+        Text(
+            "Пока сделка в прибыли, стоп переставляется вслед за максимумом цены и " +
+                "только вверх. Это не даёт прибыльной сделке снова стать убыточной, " +
+                "но иногда закрывает позицию на откате раньше времени.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+
         Text(
             "Включено: после покупки бот выставляет стоп-заявку на сервере брокера, " +
                 "и она срабатывает сама, даже когда приложение выгружено из памяти. " +

@@ -27,7 +27,7 @@ class TradingWorker(
         val journal = DecisionJournal.get(applicationContext)
         val engine = TradingEngine(
             repository = TInvestRepository(tokenStore),
-            strategy = SmaCrossoverStrategy(),
+            strategy = strategyFor(tokenStore),
             riskManager = RiskManagerHolder.configure(RiskManagerHolder.limitsFrom(tokenStore)),
             tokenStore = tokenStore,
             journal = journal,
