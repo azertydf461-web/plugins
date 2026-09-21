@@ -1,0 +1,134 @@
+name: backtest-oos
+
+# Проверка на отложенной выборке: та же логика без правок по данным, которых
+# не было ни в одном прогоне подбора.
+#   novye-instrumenty — отраслевые индексы Мосбиржи и мировые индексы,
+#     не участвовавшие в подборе, плюс индексы полной доходности
+#     (MCFTR, RTSTR, RGBITR), где дивиденды и купоны входят в саму цену;
+#   ranniy-period — те же индексы Мосбиржи, но десятилетие до окна подбора.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/backtest-oos.yml'
+      - 'tinvest-trader-android/app/src/test/**'
+
+jobs:
+  oos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Download candles
+        run: |
+          set -uo pipefail
+          exec > >(tee /tmp/fetch.log) 2>&1
+          ROOT=tinvest-trader-android/app/build/oos-data
+          NEW="$ROOT/novye-instrumenty"
+          EARLY="$ROOT/ranniy-period"
+          mkdir -p "$NEW" "$EARLY"
+
+          moex() {
+            local market="$1" sec="$2" from="$3" to="$4" file="$5"
+            local start=0 total=0
+            echo "open,high,low,close,volume,begin" > "$file"
+            while : ; do
+              url="https://iss.moex.com/iss/engines/stock/markets/$market/securities/$sec/candles.json"
+              rows=$(curl -sS --fail --max-time 60 \
+                "$url?from=$from&till=$to&interval=24&start=$start" \
+                | jq -r '.candles.data[]? | [.[0],.[2],.[3],.[1],.[5],.[6]] | @csv' \
+                | tr -d '"') || { echo "MOEX $sec: запрос не прошёл"; rm -f "$file"; return; }
+              count=$(printf '%s' "$rows" | grep -c . || true)
+              [ "$count" -eq 0 ] && break
+              printf '%s\n' "$rows" >> "$file"
+              total=$((total + count)); start=$((start + count))
+              [ "$count" -lt 500 ] && break
+            done
+            if [ "$total" -lt 400 ]; then
+              echo "MOEX $sec: только $total свечей — пропускаем"; rm -f "$file"
+            else
+              echo "MOEX $sec -> $(basename "$file"): $total свечей"
+            fi
+          }
+
+          yahoo() {
+            local sym="$1" file="$2"
+            local raw=/tmp/yahoo.json code
+            code=$(curl -sS --max-time 60 -o "$raw" -w '%{http_code}' \
+              -A "Mozilla/5.0 (X11; Linux x86_64)" \
+              "https://query1.finance.yahoo.com/v8/finance/chart/$sym?range=10y&interval=1d") || {
+                echo "Yahoo $sym: запрос не прошёл"; return; }
+            [ "$code" = "200" ] || { echo "Yahoo $sym: HTTP $code"; return; }
+            echo "open,high,low,close,volume,begin" > "$file"
+            jq -r '.chart.result[0] as $r
+              | ($r.indicators.quote[0]) as $q
+              | range(0; ($r.timestamp | length))
+              | select($q.close[.] != null and $q.open[.] != null
+                       and $q.high[.] != null and $q.low[.] != null)
+              | [ $q.open[.], $q.high[.], $q.low[.], $q.close[.],
+                  ($q.volume[.] // 0), ($r.timestamp[.] | todate) ]
+              | @csv' "$raw" 2>/dev/null | tr -d '"' >> "$file"
+            local total=$(( $(wc -l < "$file") - 1 ))
+            if [ "$total" -lt 400 ]; then
+              echo "Yahoo $sym: только $total свечей — пропускаем"; rm -f "$file"
+            else
+              echo "Yahoo $sym -> $(basename "$file"): $total свечей"
+            fi
+            sleep 1
+          }
+
+          RECENT_FROM=$(date -u -d "10 years ago" +%Y-%m-%d)
+          RECENT_TO=$(date -u +%Y-%m-%d)
+
+          echo "=== Новые инструменты, то же десятилетие ==="
+          # Отраслевые индексы Мосбиржи, не участвовавшие в подборе.
+          for i in MOEXCN MOEXEU MOEXTL MOEXTN MOEXCH MOEXRE MOEXIT; do
+            moex index "$i" "$RECENT_FROM" "$RECENT_TO" "$NEW/rf-otrasl__$i.csv"
+          done
+          # Индексы полной доходности: дивиденды и купоны уже в цене.
+          for i in MCFTR RTSTR RGBITR; do
+            moex index "$i" "$RECENT_FROM" "$RECENT_TO" "$NEW/polnaya-dohodnost__$i.csv"
+          done
+          # Мировые индексы, которых не было в подборе.
+          yahoo "%5EIBEX"  "$NEW/mir-indeks__IBEX35.csv"
+          yahoo "%5EFCHI"  "$NEW/mir-indeks__CAC40.csv"
+          yahoo "%5EAEX"   "$NEW/mir-indeks__AEX.csv"
+          yahoo "%5ESSMI"  "$NEW/mir-indeks__SMI.csv"
+          yahoo "%5EAXJO"  "$NEW/mir-indeks__ASX200.csv"
+          yahoo "%5EBVSP"  "$NEW/mir-indeks__BOVESPA.csv"
+          yahoo "%5EMXX"   "$NEW/mir-indeks__IPC_MEXICO.csv"
+          yahoo "%5EKS11"  "$NEW/mir-indeks__KOSPI.csv"
+
+          echo "=== Те же индексы, десятилетие до окна подбора ==="
+          EARLY_FROM=2006-01-01
+          EARLY_TO=2016-01-01
+          for i in IMOEX RTSI MOEXOG MOEXMM MOEXFN MCFTR RTSTR; do
+            moex index "$i" "$EARLY_FROM" "$EARLY_TO" "$EARLY/rf-indeks__$i.csv"
+          done
+
+          echo "Новых инструментов: $(ls -1 "$NEW" | wc -l), раннего периода: $(ls -1 "$EARLY" | wc -l)"
+
+      - name: Run out-of-sample check
+        working-directory: tinvest-trader-android
+        run: |
+          export OOS_DATA_DIR="$PWD/app/build/oos-data"
+          set -o pipefail
+          gradle :app:testDebugUnitTest \
+            --tests 'com.tinvesttrader.trading.OutOfSampleReport' \
+            --no-daemon 2>&1 | tee /tmp/gradle.log || {
+              echo "=== ошибки компиляции ==="
+              grep -E "^e: " /tmp/gradle.log || true
+              exit 1
+            }
+
+      - name: Что удалось скачать
+        if: always()
+        run: cat /tmp/fetch.log

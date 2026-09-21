@@ -14,6 +14,27 @@ data class PortfolioSettings(
     val trailingStop: Boolean = true,
     /** Сколько собственных свечей нужно инструменту, прежде чем он даёт сигналы. */
     val warmupBars: Int = 60,
+    /**
+     * НДФЛ с прибыли по каждой закрытой сделке. Для активной торговли налог
+     * платится с каждого удачного выхода, и на длинной дистанции это
+     * заметная часть результата.
+     */
+    val taxRatePercent: Double = 13.0,
+    /**
+     * Налог для «купить и держать». По умолчанию ноль: при владении бумагой
+     * дольше трёх лет действует льгота на долгосрочное владение. Это
+     * несимметрично к системе намеренно — такова реальность, а не поблажка
+     * эталону.
+     */
+    val buyHoldTaxRatePercent: Double = 0.0,
+    /** Через сколько торговых дней эталон приводится обратно к равным долям. */
+    val rebalanceDays: Int = 252,
+    /**
+     * Ставка за перенос непокрытой позиции, годовых. Начисляется только на
+     * часть позиций сверх собственного капитала; при работе без плеча равна
+     * нулю по построению.
+     */
+    val marginRatePercent: Double = 20.0,
 )
 
 data class PortfolioResult(
@@ -29,6 +50,10 @@ data class PortfolioResult(
     val averageExposurePercent: Double,
     val buyHoldReturnPercent: Double,
     val buyHoldMaxDrawdownPercent: Double,
+    /** Тот же эталон, но с НДФЛ — на случай, если льготы по сроку владения нет. */
+    val buyHoldAfterTaxReturnPercent: Double,
+    val taxPaidPercent: Double,
+    val marginPaidPercent: Double,
 )
 
 /**
@@ -51,6 +76,7 @@ object PortfolioBacktest {
 
     private class Position(
         val entryPrice: Double,
+        val invested: Double,
         val quantity: Double,
         var stopPrice: Double,
         val atrAtEntry: Double,
@@ -84,14 +110,18 @@ object PortfolioBacktest {
         var drawdown = 0.0
         var exposureSum = 0.0
         var exposureDays = 0
+        var taxPaid = 0.0
+        var marginPaid = 0.0
 
         dates.forEachIndexed { dayIndex, date ->
             // 1. Исполняем заявки, выставленные накануне, по открытию.
             pendingExit.toList().forEach { name ->
                 val candle = candleOn(series, name, date) ?: return@forEach
                 val position = positions.remove(name) ?: run { pendingExit.remove(name); return@forEach }
-                cash += position.quantity * candle.open.toDouble() * (1 - costHalf)
-                results += resultOf(position, candle.open.toDouble(), costHalf)
+                val closed = close(position, candle.open.toDouble(), costHalf, settings)
+                cash += closed.first
+                taxPaid += closed.second
+                results += resultOf(position, closed.first)
                 pendingExit.remove(name)
             }
             pendingEntry.toList().forEach { name ->
@@ -108,6 +138,7 @@ object PortfolioBacktest {
                 cash -= slot
                 positions[name] = Position(
                     entryPrice = price,
+                    invested = slot,
                     quantity = quantity,
                     stopPrice = stopFor(price, atr, settings),
                     atrAtEntry = atr,
@@ -123,8 +154,10 @@ object PortfolioBacktest {
                     val fill = min(position.stopPrice, candle.open.toDouble())
                     positions.remove(name)
                     pendingExit.remove(name)
-                    cash += position.quantity * fill * (1 - costHalf)
-                    results += resultOf(position, fill, costHalf)
+                    val closed = close(position, fill, costHalf, settings)
+                    cash += closed.first
+                    taxPaid += closed.second
+                    results += resultOf(position, closed.first)
                 }
             }
 
@@ -156,6 +189,16 @@ object PortfolioBacktest {
                 candleOn(series, name, date)?.let { lastClose[name] = it.close.toDouble() }
             }
 
+            // Плечо система не использует: доля в рынке не превышает капитал.
+            // Если бы превышала, перенос стоил бы денег каждый день — считаем
+            // это здесь, чтобы нулевая строка в отчёте была посчитанной, а не
+            // забытой.
+            if (cash < 0) {
+                val daily = settings.marginRatePercent / 100.0 / 365.0
+                val cost = -cash * daily
+                cash -= cost
+                marginPaid += cost
+            }
             val equity = equity(cash, positions, lastClose)
             peak = max(peak, equity)
             drawdown = max(drawdown, (peak - equity) / peak * 100)
@@ -178,8 +221,11 @@ object PortfolioBacktest {
             totalReturnPercent = (finalEquity - 1) * 100,
             maxDrawdownPercent = drawdown,
             averageExposurePercent = if (exposureDays == 0) 0.0 else exposureSum / exposureDays,
-            buyHoldReturnPercent = hold.first,
-            buyHoldMaxDrawdownPercent = hold.second,
+            buyHoldReturnPercent = hold.gross,
+            buyHoldMaxDrawdownPercent = hold.drawdown,
+            buyHoldAfterTaxReturnPercent = hold.afterTax,
+            taxPaidPercent = taxPaid * 100,
+            marginPaidPercent = marginPaid * 100,
         )
     }
 
@@ -188,14 +234,23 @@ object PortfolioBacktest {
      * ежедневной кривой, чтобы просадку пассива можно было сравнивать с
      * просадкой системы, а не принимать на веру.
      */
+    private class HoldResult(val gross: Double, val afterTax: Double, val drawdown: Double)
+
+    /**
+     * Равновзвешенное «купить и держать» по той же корзине, с периодическим
+     * приведением к равным долям и теми же издержками на ребалансировке.
+     * Считается ежедневной кривой, чтобы просадку пассива можно было
+     * сравнивать с просадкой системы, а не принимать на веру.
+     */
     private fun buyAndHold(
         series: Map<String, Series>,
         dates: List<String>,
         settings: PortfolioSettings,
-    ): Pair<Double, Double> {
+    ): HoldResult {
         val startDate = dates[settings.warmupBars]
         val quantities = mutableMapOf<String, Double>()
         val lastClose = mutableMapOf<String, Double>()
+        val costHalf = (settings.commissionPercent + settings.spreadPercent) / 100.0
         val share = 1.0 / series.size
 
         series.forEach { (name, s) ->
@@ -205,7 +260,7 @@ object PortfolioBacktest {
             if (index != null) {
                 val price = s.candles[index].close.toDouble()
                 if (price > 0) {
-                    quantities[name] = share / price
+                    quantities[name] = share * (1 - costHalf) / price
                     lastClose[name] = price
                 }
             }
@@ -214,19 +269,39 @@ object PortfolioBacktest {
         var peak = 1.0
         var drawdown = 0.0
         var equity = 1.0
-        dates.drop(settings.warmupBars).forEach { date ->
+        var rebalanceCost = 0.0
+
+        dates.drop(settings.warmupBars).forEachIndexed { index, date ->
             series.forEach { (name, _) ->
                 candleOn(series, name, date)?.let { lastClose[name] = it.close.toDouble() }
             }
             equity = quantities.entries.sumOf { (name, quantity) -> quantity * (lastClose[name] ?: 0.0) }
+
+            if (settings.rebalanceDays > 0 && index > 0 && index % settings.rebalanceDays == 0 && equity > 0) {
+                val target = equity / quantities.size
+                var turnover = 0.0
+                quantities.keys.toList().forEach { name ->
+                    val price = lastClose[name] ?: return@forEach
+                    if (price <= 0) return@forEach
+                    val current = quantities.getValue(name) * price
+                    turnover += kotlin.math.abs(target - current)
+                    quantities[name] = target / price
+                }
+                val cost = turnover * costHalf
+                rebalanceCost += cost
+                val scale = (equity - cost) / equity
+                quantities.keys.toList().forEach { name -> quantities[name] = quantities.getValue(name) * scale }
+                equity -= cost
+            }
+
             peak = max(peak, equity)
             drawdown = max(drawdown, (peak - equity) / peak * 100)
         }
-        return (equity - 1) * 100 to drawdown
-    }
 
-    private fun resultOf(position: Position, exitPrice: Double, costHalf: Double): Double =
-        (exitPrice * (1 - costHalf) - position.entryPrice) / position.entryPrice * 100 - costHalf * 100
+        val gross = (equity - 1) * 100
+        val tax = if (gross > 0) gross * settings.buyHoldTaxRatePercent / 100.0 else 0.0
+        return HoldResult(gross, gross - tax, drawdown)
+    }
 
     private fun stopFor(price: Double, atr: Double, settings: PortfolioSettings): Double {
         val floor = price * (1 - settings.maxStopPercent / 100)
