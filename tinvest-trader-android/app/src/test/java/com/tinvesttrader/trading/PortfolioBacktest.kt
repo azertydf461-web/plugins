@@ -303,6 +303,27 @@ object PortfolioBacktest {
         return HoldResult(gross, gross - tax, drawdown)
     }
 
+    /**
+     * Закрытие позиции: из выручки уходят комиссия и спред, а с прибыли —
+     * НДФЛ. Возвращает деньги, реально вернувшиеся на счёт, и уплаченный
+     * налог отдельной величиной, чтобы его было видно в отчёте.
+     */
+    private fun close(
+        position: Position,
+        exitPrice: Double,
+        costHalf: Double,
+        settings: PortfolioSettings,
+    ): Pair<Double, Double> {
+        val gross = position.quantity * exitPrice * (1 - costHalf)
+        val profit = gross - position.invested
+        val tax = if (profit > 0) profit * settings.taxRatePercent / 100.0 else 0.0
+        return (gross - tax) to tax
+    }
+
+    /** Результат сделки в процентах к вложенному, уже после издержек и налога. */
+    private fun resultOf(position: Position, proceeds: Double): Double =
+        if (position.invested <= 0) 0.0 else (proceeds - position.invested) / position.invested * 100
+
     private fun stopFor(price: Double, atr: Double, settings: PortfolioSettings): Double {
         val floor = price * (1 - settings.maxStopPercent / 100)
         if (atr <= 0) return floor
