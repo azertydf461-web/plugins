@@ -19,6 +19,14 @@ enum class StrategyMode(val key: String, val title: String, val description: Str
             "а не отменяет сделку: прибыль трендовой системы делают одна-две крупные " +
             "сделки, и пропустить такую дороже, чем войти в неё неполным объёмом.",
     ),
+    DONCHIAN(
+        key = "DONCHIAN",
+        title = "Пробой канала (Дончиан)",
+        description = "Покупка на пробое максимума за 20 свечей, выход — под минимумом за 10. " +
+            "Вход происходит в начале движения, а не после подтверждения средними, " +
+            "которое всегда запаздывает. Фильтров входа нет: риск ограничивают стоп и " +
+            "размер позиции.",
+    ),
     SMA(
         key = "SMA",
         title = "Голое пересечение средних",
@@ -41,5 +49,6 @@ fun strategyFor(store: SecureTokenStore): Strategy =
     when (StrategyMode.fromKey(store.strategyMode)) {
         StrategyMode.TREND -> TrendFollowingStrategy()
         StrategyMode.SIZING -> TrendFollowingStrategy(mode = FilterMode.SIZE)
+        StrategyMode.DONCHIAN -> DonchianBreakoutStrategy()
         StrategyMode.SMA -> SmaCrossoverStrategy()
     }

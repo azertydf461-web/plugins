@@ -36,6 +36,7 @@ class SberBacktestReport {
 
         val blocking = mutableListOf<BotBacktestResult>()
         val sizing = mutableListOf<BotBacktestResult>()
+        val breakout = mutableListOf<BotBacktestResult>()
 
         files.forEach { file ->
             val candles = readCandles(file)
@@ -58,16 +59,22 @@ class SberBacktestReport {
                 candles = candles,
                 settings = BotBacktestSettings(pollEveryNBars = 1, sizingMode = true),
             )
-            if (block == null || size == null) {
+            val donchian = StrategyBacktest.run(
+                intervalTitle = file.nameWithoutExtension,
+                candles = candles,
+                settings = BotBacktestSettings(pollEveryNBars = 1, donchian = true),
+            )
+            if (block == null || size == null || donchian == null) {
                 println("Прогон не состоялся: истории не хватило.")
                 return@forEach
             }
-            printResult(size)
+            printResult(donchian)
             blocking += block
             sizing += size
+            breakout += donchian
         }
 
-        printComparison(blocking, sizing)
+        printComparison(blocking, sizing, breakout)
     }
 
     /**
@@ -77,48 +84,63 @@ class SberBacktestReport {
     private fun printComparison(
         blocking: List<BotBacktestResult>,
         sizing: List<BotBacktestResult>,
+        breakout: List<BotBacktestResult>,
     ) {
-        if (sizing.isEmpty()) return
+        if (breakout.isEmpty()) return
         println()
-        println("============ СВОДКА: объём против запрета ============")
+        println("============ СВОДКА: пробой канала против пересечения средних ============")
         println(
-            "бумага".padEnd(22) + "сдел".padStart(6) + "ОБЪЁМ".padStart(9) +
-                "запрет".padStart(9) + "исходн".padStart(9) + "куп-держ".padStart(10) +
-                "ср.сд".padStart(8) + "просад".padStart(8),
+            "бумага".padEnd(20) + "сдел".padStart(6) + "ПРОБОЙ".padStart(9) +
+                "объём".padStart(9) + "запрет".padStart(9) + "исходн".padStart(9) +
+                "куп-держ".padStart(10) + "ср.сд".padStart(7) + "просад".padStart(8),
         )
-        sizing.forEachIndexed { index, r ->
-            val b = blocking[index]
+        breakout.forEachIndexed { index, d ->
             println(
-                r.intervalTitle.padEnd(22) +
-                    r.tradeCount.toString().padStart(6) +
-                    num(r.totalReturnPercent).padStart(9) +
-                    num(b.totalReturnPercent).padStart(9) +
-                    num(r.legacyTotalReturnPercent).padStart(9) +
-                    num(r.buyHoldReturnPercent).padStart(10) +
-                    num(r.expectancyPercent).padStart(8) +
-                    num(r.maxDrawdownPercent).padStart(8),
+                d.intervalTitle.removeSuffix("-dnevnye-10g").padEnd(20) +
+                    d.tradeCount.toString().padStart(6) +
+                    num(d.totalReturnPercent).padStart(9) +
+                    num(sizing[index].totalReturnPercent).padStart(9) +
+                    num(blocking[index].totalReturnPercent).padStart(9) +
+                    num(d.legacyTotalReturnPercent).padStart(9) +
+                    num(d.buyHoldReturnPercent).padStart(10) +
+                    num(d.expectancyPercent).padStart(7) +
+                    num(d.maxDrawdownPercent).padStart(8),
             )
         }
 
-        val sizeBeatsBlock = sizing.indices.count {
-            sizing[it].totalReturnPercent > blocking[it].totalReturnPercent
+        val beatsSizing = breakout.indices.count {
+            breakout[it].totalReturnPercent > sizing[it].totalReturnPercent
         }
-        val sizeBeatsLegacy = sizing.count { it.totalReturnPercent > it.legacyTotalReturnPercent }
-        val sizeBeatsHold = sizing.count { it.totalReturnPercent > it.buyHoldReturnPercent }
-        val positive = sizing.count { it.expectancyPercent > 0 }
+        val beatsBlocking = breakout.indices.count {
+            breakout[it].totalReturnPercent > blocking[it].totalReturnPercent
+        }
+        val beatsLegacy = breakout.count { it.totalReturnPercent > it.legacyTotalReturnPercent }
+        val beatsHold = breakout.count { it.totalReturnPercent > it.buyHoldReturnPercent }
+        val positive = breakout.count { it.expectancyPercent > 0 }
         println()
-        println("Прогонов: ${sizing.size}, сделок всего: ${sizing.sumOf { it.tradeCount }}")
-        println("Объём лучше запрета: $sizeBeatsBlock из ${sizing.size}")
-        println("Объём лучше исходной логики: $sizeBeatsLegacy из ${sizing.size}")
-        println("Объём лучше «купить и держать»: $sizeBeatsHold из ${sizing.size}")
-        println("Положительное матожидание: $positive из ${sizing.size}")
+        println("Прогонов: ${breakout.size}, сделок всего: ${breakout.sumOf { it.tradeCount }}")
+        println("Пробой лучше объёма: $beatsSizing из ${breakout.size}")
+        println("Пробой лучше запрета: $beatsBlocking из ${breakout.size}")
+        println("Пробой лучше исходной логики: $beatsLegacy из ${breakout.size}")
+        println("Пробой лучше «купить и держать»: $beatsHold из ${breakout.size}")
+        println("Положительное матожидание: $positive из ${breakout.size}")
         println(
-            "Среднее матожидание: объём ${num(sizing.sumOf { it.expectancyPercent } / sizing.size)}%, " +
+            "Среднее матожидание: пробой ${num(breakout.sumOf { it.expectancyPercent } / breakout.size)}%, " +
+                "объём ${num(sizing.sumOf { it.expectancyPercent } / sizing.size)}%, " +
                 "запрет ${num(blocking.sumOf { it.expectancyPercent } / blocking.size)}%",
         )
         println(
-            "Средняя просадка: объём ${num(sizing.sumOf { it.maxDrawdownPercent } / sizing.size)}%, " +
+            "Средняя просадка: пробой ${num(breakout.sumOf { it.maxDrawdownPercent } / breakout.size)}%, " +
+                "объём ${num(sizing.sumOf { it.maxDrawdownPercent } / sizing.size)}%, " +
                 "запрет ${num(blocking.sumOf { it.maxDrawdownPercent } / blocking.size)}%",
+        )
+        // Суммарный счёт по всем бумагам: одна бумага ничего не значит,
+        // сумма по двенадцати уже показывает, есть ли у системы край.
+        println(
+            "Сумма итогов: пробой ${num(breakout.sumOf { it.totalReturnPercent })}%, " +
+                "объём ${num(sizing.sumOf { it.totalReturnPercent })}%, " +
+                "исходная ${num(breakout.sumOf { it.legacyTotalReturnPercent })}%, " +
+                "купить-держать ${num(breakout.sumOf { it.buyHoldReturnPercent })}%",
         )
     }
 

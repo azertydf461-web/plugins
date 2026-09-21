@@ -56,6 +56,8 @@ data class BotBacktestSettings(
      * вход стоит дороже, чем уменьшенный.
      */
     val sizingMode: Boolean = false,
+    /** Пробой канала вместо пересечения средних: вход в начале движения. */
+    val donchian: Boolean = false,
     /** Подтягивать ли стоп вслед за ценой, пока сделка в прибыли. */
     val trailingStop: Boolean = true,
 )
@@ -128,6 +130,7 @@ object StrategyBacktest {
                 atrStop = false,
                 useFilters = false,
                 sizingMode = false,
+                donchian = false,
                 trailingStop = false,
             ),
         )
@@ -208,6 +211,7 @@ object StrategyBacktest {
         settings: BotBacktestSettings,
     ): List<BotTrade> {
         val strategy: Strategy = when {
+            settings.donchian -> DonchianBreakoutStrategy()
             !settings.useFilters -> SmaCrossoverStrategy()
             settings.sizingMode -> TrendFollowingStrategy(mode = FilterMode.SIZE)
             else -> TrendFollowingStrategy()
@@ -410,8 +414,17 @@ object StrategyBacktest {
             "Учтены комиссия и спред, но не проскальзывание, частичное исполнение и налог. " +
                 "Сделки считаются по открытию следующей свечи, а не по реальной цене исполнения.",
         )
+        if (settings.donchian) {
+            add(
+                "Периоды канала (20 на вход, 10 на выход) — классические значения, не " +
+                    "подобранные под эти бумаги. Подбор дал бы результат красивее, но " +
+                    "проверять его пришлось бы заново на данных, которых мы не видели.",
+            )
+        }
         add(
-            if (settings.useFilters && settings.sizingMode) {
+            if (settings.donchian) {
+                "Фильтров входа нет: система входит на каждом пробое, риск ограничен стопом."
+            } else if (settings.useFilters && settings.sizingMode) {
                 "Фильтры не запрещают вход, а режут объём: непройденный фильтр уменьшает " +
                     "долю позиции, минимум треть. Пороги (ADX 20, RSI 70, средняя 50) заданы " +
                     "заранее и не подбирались под эту бумагу."
