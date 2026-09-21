@@ -58,6 +58,12 @@ data class BotBacktestSettings(
     val sizingMode: Boolean = false,
     /** Пробой канала вместо пересечения средних: вход в начале движения. */
     val donchian: Boolean = false,
+    /**
+     * Не входить, когда инструмент за год вырос выше порога. На таком рынке
+     * система зарабатывает ноль, а держать позицию всё равно приходится —
+     * см. MarketRegime.
+     */
+    val skipRisingMarket: Boolean = false,
     /** Подтягивать ли стоп вслед за ценой, пока сделка в прибыли. */
     val trailingStop: Boolean = true,
 )
@@ -262,7 +268,8 @@ object StrategyBacktest {
             val fillPrice = candles[bar + 1].open.toDouble()
 
             if (entryBar < 0) {
-                if (decision.signal == Signal.BUY && fillPrice > 0) {
+                val risingMarket = settings.skipRisingMarket && MarketRegime.isRising(candles, bar)
+                if (decision.signal == Signal.BUY && fillPrice > 0 && !risingMarket) {
                     entryBar = bar + 1
                     entryPrice = fillPrice
                     entryAtr = Volatility.atr(window) ?: 0.0

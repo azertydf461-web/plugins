@@ -84,6 +84,37 @@ class OutOfSampleReport {
             println(row(slots.toString(), result))
         }
 
+        // То же правило, что и без налога: отдельная симуляция, а не поправка.
+        // Вход на растущем рынке отключён — там система не зарабатывает.
+        println("без входа на растущем рынке:")
+        listOf(3, 5, 10).forEach { slots ->
+            if (slots > data.size) return@forEach
+            val result = PortfolioBacktest.run(
+                data,
+                PortfolioSettings(
+                    maxPositions = slots,
+                    buyHoldTaxRatePercent = 13.0,
+                    skipRisingMarket = true,
+                ),
+            ) ?: return@forEach
+            println(row(slots.toString(), result))
+        }
+
+        println("без входа на растущем рынке и без НДФЛ:")
+        listOf(3, 5, 10).forEach { slots ->
+            if (slots > data.size) return@forEach
+            val result = PortfolioBacktest.run(
+                data,
+                PortfolioSettings(
+                    maxPositions = slots,
+                    taxRatePercent = 0.0,
+                    buyHoldTaxRatePercent = 13.0,
+                    skipRisingMarket = true,
+                ),
+            ) ?: return@forEach
+            println(row(slots.toString(), result))
+        }
+
         hold?.let {
             println(
                 "Купить и держать (ребалансировка раз в год, льгота за срок владения): " +

@@ -35,6 +35,11 @@ data class PortfolioSettings(
      * нулю по построению.
      */
     val marginRatePercent: Double = 20.0,
+    /**
+     * Не открывать позицию в инструменте, выросшем за год выше порога.
+     * На растущем рынке пробой канала не зарабатывает - см. MarketRegime.
+     */
+    val skipRisingMarket: Boolean = false,
 )
 
 data class PortfolioResult(
@@ -167,9 +172,12 @@ object PortfolioBacktest {
                 if (window.size < settings.warmupBars) return@forEach
                 val decision = strategy.evaluate(window, 1)
                 val held = positions.containsKey(name)
+                // Режим считается по всей истории инструмента, а не по окну
+                // решения: окна не хватает на год, а правило годовое.
+                val rising = settings.skipRisingMarket && risingOn(series, name, date)
                 when {
                     held && decision.signal == Signal.SELL -> pendingExit += name
-                    !held && decision.signal == Signal.BUY &&
+                    !held && decision.signal == Signal.BUY && !rising &&
                         positions.size + pendingEntry.size < settings.maxPositions -> pendingEntry += name
                     else -> Unit
                 }
@@ -343,6 +351,12 @@ object PortfolioBacktest {
     }
 
     /** Окно истории инструмента по указанную дату включительно, без заглядывания вперёд. */
+    private fun risingOn(series: Map<String, Series>, name: String, date: String): Boolean {
+        val s = series[name] ?: return false
+        val index = s.indexByDate[date] ?: return false
+        return MarketRegime.isRising(s.candles, index)
+    }
+
     private fun windowUpTo(series: Map<String, Series>, name: String, date: String): List<Candle>? {
         val s = series[name] ?: return null
         val index = s.indexByDate[date] ?: return null

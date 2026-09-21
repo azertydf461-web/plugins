@@ -131,11 +131,64 @@ class MarketRegimeReport {
         printRows(overall)
 
         println()
+        println("--- вход на растущем рынке отключён ---")
+        printComparison(files)
+
+        println()
         println("--- по классам активов ---")
         byClass.entries.sortedBy { it.key }.forEach { (assetClass, buckets) ->
             println("$assetClass:")
             printRows(buckets)
         }
+    }
+
+    /**
+     * Прямое сравнение на тех же данных: те же сделки с правилом и без.
+     * Считается по инструментам, чтобы было видно не только сумму, но и на
+     * скольких инструментах правило помогло.
+     */
+    private fun printComparison(files: List<java.io.File>) {
+        var withTrades = 0
+        var withoutTrades = 0
+        var withSum = 0.0
+        var withoutSum = 0.0
+        var better = 0
+        var worse = 0
+        var counted = 0
+
+        files.forEach { file ->
+            val candles = readCandlesCsv(file)
+            if (candles.size < REGIME_WINDOW + 200) return@forEach
+            val base = BotBacktestSettings(pollEveryNBars = 1, donchian = true)
+            val open = StrategyBacktest.run(file.nameWithoutExtension, candles, base) ?: return@forEach
+            val filtered = StrategyBacktest.run(
+                file.nameWithoutExtension,
+                candles,
+                base.copy(skipRisingMarket = true),
+            ) ?: return@forEach
+
+            counted++
+            withoutTrades += open.tradeCount
+            withTrades += filtered.tradeCount
+            withoutSum += open.totalReturnPercent
+            withSum += filtered.totalReturnPercent
+            if (filtered.totalReturnPercent > open.totalReturnPercent) better++ else worse++
+        }
+
+        if (counted == 0) {
+            println("Сравнить не на чем.")
+            return
+        }
+        println("Инструментов в сравнении: $counted")
+        println(
+            "как есть:      сделок ${withoutTrades}, итог ${num(withoutSum)}%, " +
+                "на инструмент ${num(withoutSum / counted)}%",
+        )
+        println(
+            "без роста:     сделок ${withTrades}, итог ${num(withSum)}%, " +
+                "на инструмент ${num(withSum / counted)}%",
+        )
+        println("правило помогло на $better инструментах из $counted, навредило на $worse")
     }
 
     private fun printRows(buckets: Map<String, Bucket>) {
