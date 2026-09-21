@@ -1,0 +1,85 @@
+name: backtest-sber
+
+# Прогон стратегии бота по настоящим котировкам Московской биржи.
+# Данные тянет этот workflow (ISS MOEX, открытый API без ключей), считает —
+# тот же код Kotlin, которым торгует приложение.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: Тикер на Московской бирже
+        default: SBER
+      years:
+        description: Глубина дневной истории, лет
+        default: "3"
+  push:
+    paths:
+      - '.github/workflows/backtest-sber.yml'
+      - 'tinvest-trader-android/app/src/test/**'
+      - 'tinvest-trader-android/app/src/main/java/com/tinvesttrader/trading/**'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Download candles from MOEX
+        env:
+          TICKER: ${{ github.event.inputs.ticker || 'SBER' }}
+          YEARS: ${{ github.event.inputs.years || '3' }}
+        run: |
+          set -euo pipefail
+          OUT=tinvest-trader-android/app/build/backtest-data
+          mkdir -p "$OUT"
+
+          # ISS отдаёт не больше 500 свечей за запрос, поэтому листаем курсором.
+          fetch() {
+            local interval="$1" from="$2" name="$3"
+            local start=0 total=0
+            echo "open,high,low,close,volume,begin" > "$OUT/$name.csv"
+            while : ; do
+              url="https://iss.moex.com/iss/engines/stock/markets/shares/securities/$TICKER/candles.json"
+              url="$url?from=$from&interval=$interval&start=$start"
+              rows=$(curl -sS --fail --max-time 60 "$url" \
+                | jq -r '.candles.data[] | [.[0],.[2],.[3],.[1],.[5],.[6]] | @csv' \
+                | tr -d '"')
+              count=$(printf '%s' "$rows" | grep -c . || true)
+              [ "$count" -eq 0 ] && break
+              printf '%s\n' "$rows" >> "$OUT/$name.csv"
+              total=$((total + count))
+              start=$((start + count))
+              [ "$count" -lt 500 ] && break
+            done
+            echo "$name: $total свечей"
+          }
+
+          DAY_FROM=$(date -u -d "$YEARS years ago" +%Y-%m-%d)
+          HOUR_FROM=$(date -u -d "6 months ago" +%Y-%m-%d)
+          fetch 24 "$DAY_FROM" "${TICKER}-dnevnye-${YEARS}g"
+          fetch 60 "$HOUR_FROM" "${TICKER}-chasovye-6mes"
+
+      - name: Run strategy backtest
+        working-directory: tinvest-trader-android
+        run: |
+          gradle :app:testDebugUnitTest \
+            --tests 'com.tinvesttrader.trading.SberBacktestReport' \
+            -Dbacktest.data.dir="$PWD/app/build/backtest-data" \
+            --no-daemon --stacktrace
+
+      - name: Print report
+        if: always()
+        working-directory: tinvest-trader-android
+        run: |
+          cat app/build/backtest-data/*.csv | head -3
+          echo "--- отчёт ---"
+          find app/build/test-results -name '*.xml' -exec sh -c \
+            'sed -n "s/.*<system-out>//p;/<\/system-out>/q" "$1"' _ {} \; || true
