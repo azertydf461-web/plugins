@@ -9,10 +9,13 @@ on:
     inputs:
       tickers:
         description: Тикеры Московской биржи через пробел
-        default: SBER LKOH PHOR PLZL
+        default: SBER LKOH GAZP GMKN ROSN NVTK PLZL PHOR MGNT TATN CHMF MTSS
       years:
         description: Глубина дневной истории, лет
-        default: "3"
+        default: "10"
+      intervals:
+        description: Таймфреймы через пробел — day и/или hour
+        default: day
   push:
     paths:
       - '.github/workflows/backtest-strategy.yml'
@@ -34,8 +37,9 @@ jobs:
 
       - name: Download candles from MOEX
         env:
-          TICKERS: ${{ github.event.inputs.tickers || 'SBER LKOH PHOR PLZL' }}
-          YEARS: ${{ github.event.inputs.years || '3' }}
+          TICKERS: ${{ github.event.inputs.tickers || 'SBER LKOH GAZP GMKN ROSN NVTK PLZL PHOR MGNT TATN CHMF MTSS' }}
+          YEARS: ${{ github.event.inputs.years || '10' }}
+          INTERVALS: ${{ github.event.inputs.intervals || 'day' }}
         run: |
           set -euo pipefail
           OUT=tinvest-trader-android/app/build/backtest-data
@@ -65,8 +69,12 @@ jobs:
           DAY_FROM=$(date -u -d "$YEARS years ago" +%Y-%m-%d)
           HOUR_FROM=$(date -u -d "6 months ago" +%Y-%m-%d)
           for ticker in $TICKERS; do
-            fetch "$ticker" 24 "$DAY_FROM" "${ticker}-dnevnye-${YEARS}g"
-            fetch "$ticker" 60 "$HOUR_FROM" "${ticker}-chasovye-6mes"
+            case " $INTERVALS " in
+              *" day "*) fetch "$ticker" 24 "$DAY_FROM" "${ticker}-dnevnye-${YEARS}g" ;;
+            esac
+            case " $INTERVALS " in
+              *" hour "*) fetch "$ticker" 60 "$HOUR_FROM" "${ticker}-chasovye-6mes" ;;
+            esac
           done
 
       - name: Run strategy backtest

@@ -34,6 +34,8 @@ class SberBacktestReport {
             return
         }
 
+        val summary = mutableListOf<BotBacktestResult>()
+
         files.forEach { file ->
             val candles = readCandles(file)
             println()
@@ -52,7 +54,51 @@ class SberBacktestReport {
                 return@forEach
             }
             printResult(result)
+            summary += result
         }
+
+        printSummary(summary)
+    }
+
+    /**
+     * Сводка печатается последней: по двум десяткам бумаг подробные таблицы
+     * читать невозможно, а решение принимается именно по этим цифрам.
+     */
+    private fun printSummary(results: List<BotBacktestResult>) {
+        if (results.isEmpty()) return
+        println()
+        println("============ СВОДКА ============")
+        println(
+            "бумага".padEnd(22) + "сдел".padStart(6) + "ср.сд".padStart(8) +
+                "итог".padStart(9) + "исходн".padStart(9) + "купил-держал".padStart(14) +
+                "ПФ".padStart(7) + "просад".padStart(8),
+        )
+        results.forEach { r ->
+            println(
+                r.intervalTitle.padEnd(22) +
+                    r.tradeCount.toString().padStart(6) +
+                    num(r.expectancyPercent).padStart(8) +
+                    num(r.totalReturnPercent).padStart(9) +
+                    num(r.legacyTotalReturnPercent).padStart(9) +
+                    num(r.buyHoldReturnPercent).padStart(14) +
+                    (r.profitFactor?.let { num(it) } ?: "-").padStart(7) +
+                    num(r.maxDrawdownPercent).padStart(8),
+            )
+        }
+
+        // Итоги по всему набору: одна бумага ничего не доказывает, а вот
+        // доля выигранных сравнений и суммарный счёт — уже свидетельство.
+        val filtersBeatLegacy = results.count { it.totalReturnPercent > it.legacyTotalReturnPercent }
+        val beatBuyHold = results.count { it.totalReturnPercent > it.buyHoldReturnPercent }
+        val profitable = results.count { it.expectancyPercent > 0 }
+        val totalTrades = results.sumOf { it.tradeCount }
+        val avgExpectancy = results.sumOf { it.expectancyPercent } / results.size
+        println()
+        println("Прогонов: ${results.size}, сделок всего: $totalTrades")
+        println("Фильтры лучше исходной логики: $filtersBeatLegacy из ${results.size}")
+        println("Лучше «купить и держать»: $beatBuyHold из ${results.size}")
+        println("Положительное матожидание: $profitable из ${results.size}")
+        println("Среднее матожидание по всем прогонам: ${num(avgExpectancy)}%")
     }
 
     private fun printResult(result: BotBacktestResult) {
