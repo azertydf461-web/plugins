@@ -36,6 +36,9 @@ jobs:
           YEARS: ${{ github.event.inputs.years || '10' }}
         run: |
           set -uo pipefail
+          # Сообщения загрузки дублируются в файл: в хвосте лога их иначе не
+          # видно, а без них непонятно, какой инструмент не доехал и почему.
+          exec > >(tee /tmp/fetch.log) 2>&1
           OUT=tinvest-trader-android/app/build/backtest-data
           mkdir -p "$OUT"
           FROM=$(date -u -d "$YEARS years ago" +%Y-%m-%d)
@@ -76,10 +79,16 @@ jobs:
           stooq() {
             local sym="$1" name="$2"
             local raw=/tmp/stooq.csv
-            curl -sS --max-time 60 "https://stooq.com/q/d/l/?s=$sym&i=d&d1=$D1&d2=$D2" -o "$raw" || {
-              echo "Stooq $sym: запрос не прошёл"; return; }
-            head -1 "$raw" | grep -q '^Date,Open' || {
-              echo "Stooq $sym: данных нет ($(head -c 60 "$raw"))"; return; }
+            # Без браузерного User-Agent источник отдаёт заглушку вместо CSV,
+            # а один из двух его доменов периодически режет запросы — поэтому
+            # пробуем оба, прежде чем признать инструмент недоступным.
+            local ok=0
+            for host in stooq.com stooq.pl; do
+              curl -sS --max-time 60 -A "Mozilla/5.0 (X11; Linux x86_64)"                 "https://$host/q/d/l/?s=$sym&i=d&d1=$D1&d2=$D2" -o "$raw" || continue
+              if head -1 "$raw" | grep -q '^Date,Open'; then ok=1; break; fi
+            done
+            [ "$ok" -eq 1 ] || {
+              echo "Stooq $sym: данных нет ($(head -c 80 "$raw" | tr -d '\n'))"; return; }
             local file="$OUT/$name.csv"
             echo "open,high,low,close,volume,begin" > "$file"
             awk -F, 'NR>1 && $5 != "" && $5 != "N/D" {
@@ -151,3 +160,7 @@ jobs:
               grep -E "^e: " /tmp/gradle.log || true
               exit 1
             }
+
+      - name: Что удалось скачать
+        if: always()
+        run: cat /tmp/fetch.log
