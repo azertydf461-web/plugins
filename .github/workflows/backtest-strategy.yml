@@ -1,21 +1,17 @@
 name: backtest-strategy
 
-# Прогон стратегии бота по настоящим котировкам Московской биржи.
-# Данные тянет этот workflow (ISS MOEX, открытый API без ключей), считает —
-# тот же код Kotlin, которым торгует приложение.
+# Прогон стратегии бота по настоящим котировкам.
+# Данные тянет этот workflow из двух открытых источников без ключей:
+#   ISS Московской биржи — российские акции, валюты и индексы;
+#   Stooq — мировые индексы, валютные пары, товарные фьючерсы и крипта.
+# Считает — тот же код Kotlin, которым торгует приложение.
 
 on:
   workflow_dispatch:
     inputs:
-      tickers:
-        description: Тикеры Московской биржи через пробел
-        default: SBER LKOH GAZP GMKN ROSN NVTK PLZL PHOR MGNT TATN CHMF MTSS
       years:
-        description: Глубина дневной истории, лет
+        description: Глубина истории, лет
         default: "10"
-      intervals:
-        description: Таймфреймы через пробел — day и/или hour
-        default: day
   push:
     paths:
       - '.github/workflows/backtest-strategy.yml'
@@ -35,47 +31,113 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Download candles from MOEX
+      - name: Download candles
         env:
-          TICKERS: ${{ github.event.inputs.tickers || 'SBER LKOH GAZP GMKN ROSN NVTK PLZL PHOR MGNT TATN CHMF MTSS' }}
           YEARS: ${{ github.event.inputs.years || '10' }}
-          INTERVALS: ${{ github.event.inputs.intervals || 'day' }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           OUT=tinvest-trader-android/app/build/backtest-data
           mkdir -p "$OUT"
+          FROM=$(date -u -d "$YEARS years ago" +%Y-%m-%d)
+          D1=$(date -u -d "$YEARS years ago" +%Y%m%d)
+          D2=$(date -u +%Y%m%d)
 
-          # ISS отдаёт не больше 500 свечей за запрос, поэтому листаем курсором.
-          fetch() {
-            local ticker="$1" interval="$2" from="$3" name="$4"
+          # Имя файла: <класс>__<инструмент>. По классу отчёт группирует итоги —
+          # вопрос ведь не «работает ли на Сбере», а «на каком классе активов».
+          # ISS отдаёт максимум 500 свечей за запрос, поэтому листаем курсором.
+          moex() {
+            local engine="$1" market="$2" sec="$3" name="$4"
             local start=0 total=0
-            echo "open,high,low,close,volume,begin" > "$OUT/$name.csv"
+            local file="$OUT/$name.csv"
+            echo "open,high,low,close,volume,begin" > "$file"
             while : ; do
-              url="https://iss.moex.com/iss/engines/stock/markets/shares/securities/$ticker/candles.json"
-              url="$url?from=$from&interval=$interval&start=$start"
-              rows=$(curl -sS --fail --max-time 60 "$url" \
-                | jq -r '.candles.data[] | [.[0],.[2],.[3],.[1],.[5],.[6]] | @csv' \
-                | tr -d '"')
+              url="https://iss.moex.com/iss/engines/$engine/markets/$market/securities/$sec/candles.json"
+              rows=$(curl -sS --fail --max-time 60 "$url?from=$FROM&interval=24&start=$start" \
+                | jq -r '.candles.data[]? | [.[0],.[2],.[3],.[1],.[5],.[6]] | @csv' \
+                | tr -d '"') || { echo "MOEX $sec: запрос не прошёл"; rm -f "$file"; return; }
               count=$(printf '%s' "$rows" | grep -c . || true)
               [ "$count" -eq 0 ] && break
-              printf '%s\n' "$rows" >> "$OUT/$name.csv"
+              printf '%s\n' "$rows" >> "$file"
               total=$((total + count))
               start=$((start + count))
               [ "$count" -lt 500 ] && break
             done
-            echo "$name: $total свечей"
+            if [ "$total" -lt 400 ]; then
+              echo "MOEX $sec: только $total свечей — пропускаем"
+              rm -f "$file"
+            else
+              echo "MOEX $sec -> $name: $total свечей"
+            fi
           }
 
-          DAY_FROM=$(date -u -d "$YEARS years ago" +%Y-%m-%d)
-          HOUR_FROM=$(date -u -d "6 months ago" +%Y-%m-%d)
-          for ticker in $TICKERS; do
-            case " $INTERVALS " in
-              *" day "*) fetch "$ticker" 24 "$DAY_FROM" "${ticker}-dnevnye-${YEARS}g" ;;
-            esac
-            case " $INTERVALS " in
-              *" hour "*) fetch "$ticker" 60 "$HOUR_FROM" "${ticker}-chasovye-6mes" ;;
-            esac
+          # Stooq отдаёт всю историю одним CSV: Date,Open,High,Low,Close,Volume.
+          # При исчерпании лимита он возвращает текст вместо данных, поэтому
+          # заголовок проверяется — иначе в прогон уедет мусор.
+          stooq() {
+            local sym="$1" name="$2"
+            local raw=/tmp/stooq.csv
+            curl -sS --max-time 60 "https://stooq.com/q/d/l/?s=$sym&i=d&d1=$D1&d2=$D2" -o "$raw" || {
+              echo "Stooq $sym: запрос не прошёл"; return; }
+            head -1 "$raw" | grep -q '^Date,Open' || {
+              echo "Stooq $sym: данных нет ($(head -c 60 "$raw"))"; return; }
+            local file="$OUT/$name.csv"
+            echo "open,high,low,close,volume,begin" > "$file"
+            awk -F, 'NR>1 && $5 != "" && $5 != "N/D" {
+              v = ($6 == "" || $6 == "N/D") ? 0 : $6
+              print $2 "," $3 "," $4 "," $5 "," v "," $1
+            }' "$raw" >> "$file"
+            local total=$(( $(wc -l < "$file") - 1 ))
+            if [ "$total" -lt 400 ]; then
+              echo "Stooq $sym: только $total свечей — пропускаем"
+              rm -f "$file"
+            else
+              echo "Stooq $sym -> $name: $total свечей"
+            fi
+            sleep 2
+          }
+
+          # --- Российские акции -------------------------------------------
+          for t in SBER GAZP LKOH GMKN ROSN NVTK PLZL PHOR MGNT TATN CHMF MTSS \
+                   NLMK MAGN ALRS AFLT MOEX RTKM SNGS IRAO HYDR FEES VTBR SIBN; do
+            moex stock shares "$t" "rf-akcii__$t"
           done
+
+          # --- Валюты Московской биржи ------------------------------------
+          moex currency selt USD000UTSTOM "rf-valyuta__USDRUB"
+          moex currency selt EUR_RUB__TOM "rf-valyuta__EURRUB"
+          moex currency selt CNYRUB_TOM   "rf-valyuta__CNYRUB"
+
+          # --- Индексы Московской биржи -----------------------------------
+          for i in IMOEX RTSI MOEXOG MOEXMM MOEXFN; do
+            moex stock index "$i" "rf-indeks__$i"
+          done
+
+          # --- Мировые индексы --------------------------------------------
+          stooq "%5Espx" "mir-indeks__SP500"
+          stooq "%5Endx" "mir-indeks__NASDAQ100"
+          stooq "%5Edax" "mir-indeks__DAX"
+          stooq "%5Enkx" "mir-indeks__NIKKEI"
+
+          # --- Валютные пары ----------------------------------------------
+          for p in eurusd usdjpy gbpusd audusd usdchf; do
+            stooq "$p" "mir-valyuta__$(echo "$p" | tr 'a-z' 'A-Z')"
+          done
+
+          # --- Товарные фьючерсы (непрерывные серии) ----------------------
+          # Отдельный контракт живёт квартал, поэтому десятилетнюю историю
+          # даёт только склеенная серия — на ней и проверяем.
+          stooq "gc.f" "tovary__ZOLOTO"
+          stooq "si.f" "tovary__SEREBRO"
+          stooq "cl.f" "tovary__NEFT_WTI"
+          stooq "ng.f" "tovary__GAZ"
+          stooq "hg.f" "tovary__MED"
+          stooq "zw.f" "tovary__PSHENICA"
+
+          # --- Крипта ------------------------------------------------------
+          stooq "btcusd" "kripta__BTCUSD"
+          stooq "ethusd" "kripta__ETHUSD"
+
+          echo "Итого файлов: $(ls -1 "$OUT" | wc -l)"
 
       - name: Run strategy backtest
         working-directory: tinvest-trader-android
@@ -83,17 +145,9 @@ jobs:
           export BACKTEST_DATA_DIR="$PWD/app/build/backtest-data"
           set -o pipefail
           gradle :app:testDebugUnitTest \
-            --tests 'com.tinvesttrader.trading.SberBacktestReport' \
+            --tests 'com.tinvesttrader.trading.StrategyBacktestReport' \
             --no-daemon 2>&1 | tee /tmp/gradle.log || {
               echo "=== ошибки компиляции ==="
-              grep -E "^e: |^w: .*error" /tmp/gradle.log || true
+              grep -E "^e: " /tmp/gradle.log || true
               exit 1
             }
-
-      - name: Print report
-        if: always()
-        working-directory: tinvest-trader-android
-        run: |
-          for f in app/build/backtest-data/*.csv; do
-            echo "$f: $(wc -l < "$f") строк"
-          done
