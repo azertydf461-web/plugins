@@ -1,4 +1,4 @@
-name: backtest-sber
+name: backtest-strategy
 
 # Прогон стратегии бота по настоящим котировкам Московской биржи.
 # Данные тянет этот workflow (ISS MOEX, открытый API без ключей), считает —
@@ -7,15 +7,15 @@ name: backtest-sber
 on:
   workflow_dispatch:
     inputs:
-      ticker:
-        description: Тикер на Московской бирже
-        default: SBER
+      tickers:
+        description: Тикеры Московской биржи через пробел
+        default: SBER LKOH PHOR PLZL
       years:
         description: Глубина дневной истории, лет
         default: "3"
   push:
     paths:
-      - '.github/workflows/backtest-sber.yml'
+      - '.github/workflows/backtest-strategy.yml'
       - 'tinvest-trader-android/app/src/test/**'
       - 'tinvest-trader-android/app/src/main/java/com/tinvesttrader/trading/**'
 
@@ -34,7 +34,7 @@ jobs:
 
       - name: Download candles from MOEX
         env:
-          TICKER: ${{ github.event.inputs.ticker || 'SBER' }}
+          TICKERS: ${{ github.event.inputs.tickers || 'SBER LKOH PHOR PLZL' }}
           YEARS: ${{ github.event.inputs.years || '3' }}
         run: |
           set -euo pipefail
@@ -43,11 +43,11 @@ jobs:
 
           # ISS отдаёт не больше 500 свечей за запрос, поэтому листаем курсором.
           fetch() {
-            local interval="$1" from="$2" name="$3"
+            local ticker="$1" interval="$2" from="$3" name="$4"
             local start=0 total=0
             echo "open,high,low,close,volume,begin" > "$OUT/$name.csv"
             while : ; do
-              url="https://iss.moex.com/iss/engines/stock/markets/shares/securities/$TICKER/candles.json"
+              url="https://iss.moex.com/iss/engines/stock/markets/shares/securities/$ticker/candles.json"
               url="$url?from=$from&interval=$interval&start=$start"
               rows=$(curl -sS --fail --max-time 60 "$url" \
                 | jq -r '.candles.data[] | [.[0],.[2],.[3],.[1],.[5],.[6]] | @csv' \
@@ -64,8 +64,10 @@ jobs:
 
           DAY_FROM=$(date -u -d "$YEARS years ago" +%Y-%m-%d)
           HOUR_FROM=$(date -u -d "6 months ago" +%Y-%m-%d)
-          fetch 24 "$DAY_FROM" "${TICKER}-dnevnye-${YEARS}g"
-          fetch 60 "$HOUR_FROM" "${TICKER}-chasovye-6mes"
+          for ticker in $TICKERS; do
+            fetch "$ticker" 24 "$DAY_FROM" "${ticker}-dnevnye-${YEARS}g"
+            fetch "$ticker" 60 "$HOUR_FROM" "${ticker}-chasovye-6mes"
+          done
 
       - name: Run strategy backtest
         working-directory: tinvest-trader-android
