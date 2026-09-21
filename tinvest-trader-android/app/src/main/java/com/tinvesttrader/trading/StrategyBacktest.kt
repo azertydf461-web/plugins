@@ -7,6 +7,7 @@ enum class BotExitReason(val title: String) {
     SIGNAL("сигнал на продажу"),
     STOP_LOSS("стоп-лосс"),
     END("конец истории"),
+    SESSION_END("закрытие дня"),
 }
 
 data class BotTrade(
@@ -66,6 +67,17 @@ data class BotBacktestSettings(
     val skipRisingMarket: Boolean = false,
     /** Подтягивать ли стоп вслед за ценой, пока сделка в прибыли. */
     val trailingStop: Boolean = true,
+    /**
+     * Стратегия, заданная напрямую. Перекрывает выбор по флагам выше — для
+     * прогонов, где сравниваются подходы, которых флаги не описывают.
+     */
+    val strategy: Strategy? = null,
+    /**
+     * Не переносить позицию через ночь: закрывать на последней свече дня и не
+     * входить на ней. Для внутридневных прогонов, где ночной разрыв цены —
+     * риск, который стратегия не контролирует.
+     */
+    val flatAtSessionEnd: Boolean = false,
 )
 
 data class BotBacktestResult(
@@ -216,7 +228,7 @@ object StrategyBacktest {
         candles: List<Candle>,
         settings: BotBacktestSettings,
     ): List<BotTrade> {
-        val strategy: Strategy = when {
+        val strategy: Strategy = settings.strategy ?: when {
             settings.donchian -> DonchianBreakoutStrategy()
             !settings.useFilters -> SmaCrossoverStrategy()
             settings.sizingMode -> TrendFollowingStrategy(mode = FilterMode.SIZE)
@@ -258,6 +270,17 @@ object StrategyBacktest {
                 }
             }
 
+            val lastBarOfDay = settings.flatAtSessionEnd && day(candles[bar].time) != day(candles[bar + 1].time)
+            if (entryBar >= 0 && lastBarOfDay) {
+                trades += trade(
+                    candles, entryBar, entryPrice, bar, candles[bar].close.toDouble(),
+                    BotExitReason.SESSION_END, costPerTrade, entryConviction,
+                )
+                entryBar = -1
+                bar++
+                continue
+            }
+
             if (!isPollBar) {
                 bar++
                 continue
@@ -269,7 +292,7 @@ object StrategyBacktest {
 
             if (entryBar < 0) {
                 val risingMarket = settings.skipRisingMarket && MarketRegime.isRising(candles, bar)
-                if (decision.signal == Signal.BUY && fillPrice > 0 && !risingMarket) {
+                if (decision.signal == Signal.BUY && fillPrice > 0 && !risingMarket && !lastBarOfDay) {
                     entryBar = bar + 1
                     entryPrice = fillPrice
                     entryAtr = Volatility.atr(window) ?: 0.0
@@ -455,6 +478,8 @@ object StrategyBacktest {
             add("Сделок $tradeCount — мало: пара удачных исходов заметно двигает всю статистику.")
         }
     }
+
+    private fun day(time: String): String = time.take(10)
 
     private fun shortTime(raw: String): String = raw.take(16).replace('T', ' ').ifBlank { "—" }
 }

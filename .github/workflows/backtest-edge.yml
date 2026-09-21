@@ -1,0 +1,94 @@
+name: backtest-edge
+
+# Поиск другого источника края: внутридневная частота и спреды.
+#   intraday/<тикер>__<интервал>.csv — часовые (3 года) и десятиминутные
+#     (полтора года) свечи ликвидных бумаг Мосбиржи;
+#   pairs/<тикер>.csv — дневные свечи за десять лет для спредов
+#     обыкновенная/привилегированная и пар одного сектора.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/backtest-edge.yml'
+      - 'tinvest-trader-android/app/src/test/**'
+      - 'tinvest-trader-android/app/src/main/java/com/tinvesttrader/trading/**'
+
+jobs:
+  edge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Download candles
+        run: |
+          set -uo pipefail
+          exec > >(tee /tmp/fetch.log) 2>&1
+          ROOT=tinvest-trader-android/app/build/edge-data
+          INTRA="$ROOT/intraday"
+          PAIRS="$ROOT/pairs"
+          mkdir -p "$INTRA" "$PAIRS"
+
+          # interval: 60 — час, 10 — десять минут, 24 — день.
+          moex() {
+            local sec="$1" interval="$2" from="$3" to="$4" file="$5" minimum="$6"
+            local start=0 total=0
+            echo "open,high,low,close,volume,begin" > "$file"
+            while : ; do
+              url="https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/$sec/candles.json"
+              rows=$(curl -sS --fail --max-time 60 \
+                "$url?from=$from&till=$to&interval=$interval&start=$start" \
+                | jq -r '.candles.data[]? | [.[0],.[2],.[3],.[1],.[5],.[6]] | @csv' \
+                | tr -d '"') || { echo "MOEX $sec/$interval: запрос не прошёл"; rm -f "$file"; return; }
+              count=$(printf '%s' "$rows" | grep -c . || true)
+              [ "$count" -eq 0 ] && break
+              printf '%s\n' "$rows" >> "$file"
+              total=$((total + count)); start=$((start + count))
+              [ "$count" -lt 500 ] && break
+            done
+            if [ "$total" -lt "$minimum" ]; then
+              echo "MOEX $sec/$interval: только $total свечей — пропускаем"; rm -f "$file"
+            else
+              echo "MOEX $sec/$interval -> $(basename "$file"): $total свечей, с $(sed -n 2p "$file" | cut -d, -f6)"
+            fi
+          }
+
+          TODAY=$(date -u +%Y-%m-%d)
+          echo "=== Часовые свечи, 3 года ==="
+          for t in SBER GAZP LKOH ROSN NVTK GMKN PLZL TATN MGNT SNGS; do
+            moex "$t" 60 "$(date -u -d '3 years ago' +%Y-%m-%d)" "$TODAY" "$INTRA/${t}__60m.csv" 600
+          done
+          echo "=== Десятиминутные свечи, полтора года ==="
+          for t in SBER GAZP LKOH ROSN NVTK GMKN PLZL TATN MGNT SNGS; do
+            moex "$t" 10 "$(date -u -d '18 months ago' +%Y-%m-%d)" "$TODAY" "$INTRA/${t}__10m.csv" 600
+          done
+          echo "=== Дневные свечи для спредов, 10 лет ==="
+          for t in SBER SBERP TATN TATNP SNGS SNGSP RTKM RTKMP BANE BANEP MTLR MTLRP \
+                   NKNC NKNCP LSNG LSNGP LKOH ROSN NLMK MAGN CHMF GAZP NVTK VTBR; do
+            moex "$t" 24 "$(date -u -d '10 years ago' +%Y-%m-%d)" "$TODAY" "$PAIRS/$t.csv" 400
+          done
+          echo "Внутридневных файлов: $(ls -1 "$INTRA" | wc -l), дневных для спредов: $(ls -1 "$PAIRS" | wc -l)"
+
+      - name: Run edge search
+        working-directory: tinvest-trader-android
+        run: |
+          export EDGE_DATA_DIR="$PWD/app/build/edge-data"
+          set -o pipefail
+          gradle :app:testDebugUnitTest \
+            --tests 'com.tinvesttrader.trading.EdgeReport' \
+            --no-daemon 2>&1 | tee /tmp/gradle.log || {
+              echo "=== ошибки компиляции ==="
+              grep -E "^e: " /tmp/gradle.log || true
+              exit 1
+            }
+
+      - name: Что удалось скачать
+        if: always()
+        run: cat /tmp/fetch.log
