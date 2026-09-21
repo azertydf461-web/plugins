@@ -35,5 +35,8 @@ object MarketRegime {
         index: Int,
         window: Int = WINDOW_BARS,
         thresholdPercent: Double = RISING_THRESHOLD_PERCENT,
-    ): Boolean = (changePercent(candles, index, window) ?: return false) > thresholdPercent
+    ): Boolean {
+        val change = changePercent(candles, index, window) ?: return false
+        return change > thresholdPercent
+    }
 }
