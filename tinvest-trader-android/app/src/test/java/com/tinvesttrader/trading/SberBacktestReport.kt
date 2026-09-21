@@ -87,7 +87,14 @@ class SberBacktestReport {
         println(row("Профит-фактор", result.profitFactor?.let(::fmt) ?: "нет убытков", "-"))
         println(row("Макс. просадка, %", num(result.maxDrawdownPercent), "-"))
         println(row("Выходов по стопу", result.stopLossExits.toString(), "-"))
-        println(row("Среднее удержание, свечей", num(result.averageBarsHeld), "-"))
+        val held = result.trades.map { it.barsHeld }
+        println(
+            row(
+                "Удержание, свечей",
+                if (held.isEmpty()) "-" else "${held.min()}..${held.max()}",
+                "-",
+            ),
+        )
         println(row("Издержки на сделку, %", num(result.costPerTradePercent), "-"))
         println()
         println("Купить и держать за тот же период: ${num(result.buyHoldReturnPercent)}%")
