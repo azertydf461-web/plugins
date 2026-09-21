@@ -182,7 +182,9 @@ jobs:
         run: |
           export REGIME_DATA_DIR="$PWD/app/build/backtest-data"
           set -o pipefail
-          gradle :app:testDebugUnitTest \
+          # Тесты уже прогонялись шагом выше, и без сброса Gradle считает задачу
+          # выполненной: отчёт молча не печатается.
+          gradle :app:cleanTestDebugUnitTest :app:testDebugUnitTest \
             --tests 'com.tinvesttrader.trading.MarketRegimeReport' \
             --no-daemon 2>&1 | tee /tmp/regime.log || {
               echo "=== ошибки компиляции ==="
