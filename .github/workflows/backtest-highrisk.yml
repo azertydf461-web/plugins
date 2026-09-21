@@ -1,0 +1,116 @@
+name: backtest-highrisk
+
+# Инструменты с повышенным риском, доступные счёту после тестирования:
+# фьючерсы (склеенные из контрактов), акции вне котировальных списков,
+# иностранные акции и ETF; поверх каждого класса — плечо 2x.
+# Опционы и структурные облигации не проверяются: у бота нет для них ни
+# данных, ни механики исполнения.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/backtest-highrisk.yml'
+      - '.github/scripts/moex-futures-splice.py'
+      - 'tinvest-trader-android/app/src/test/java/com/tinvesttrader/trading/HighRiskReport.kt'
+
+jobs:
+  highrisk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Download candles
+        run: |
+          set -uo pipefail
+          exec > >(tee /tmp/fetch.log) 2>&1
+          OUT=tinvest-trader-android/app/build/highrisk-data
+          mkdir -p "$OUT"
+
+          moex() {
+            local sec="$1" file="$2"
+            local start=0 total=0 from to
+            from=$(date -u -d '10 years ago' +%Y-%m-%d); to=$(date -u +%Y-%m-%d)
+            echo "open,high,low,close,volume,begin" > "$file"
+            while : ; do
+              url="https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/$sec/candles.json"
+              rows=$(curl -sS --fail --max-time 60 \
+                "$url?from=$from&till=$to&interval=24&start=$start" \
+                | jq -r '.candles.data[]? | [.[0],.[2],.[3],.[1],.[5],.[6]] | @csv' \
+                | tr -d '"') || { echo "MOEX $sec: запрос не прошёл"; rm -f "$file"; return; }
+              count=$(printf '%s' "$rows" | grep -c . || true)
+              [ "$count" -eq 0 ] && break
+              printf '%s\n' "$rows" >> "$file"
+              total=$((total + count)); start=$((start + count))
+              [ "$count" -lt 500 ] && break
+            done
+            if [ "$total" -lt 400 ]; then
+              echo "MOEX $sec: только $total свечей — пропускаем"; rm -f "$file"
+            else
+              echo "MOEX $sec -> $(basename "$file"): $total свечей"
+            fi
+          }
+
+          yahoo() {
+            local sym="$1" file="$2" raw=/tmp/yahoo.json code
+            code=$(curl -sS --max-time 60 -o "$raw" -w '%{http_code}' \
+              -A "Mozilla/5.0 (X11; Linux x86_64)" \
+              "https://query1.finance.yahoo.com/v8/finance/chart/$sym?range=10y&interval=1d") || {
+                echo "Yahoo $sym: запрос не прошёл"; return; }
+            [ "$code" = "200" ] || { echo "Yahoo $sym: HTTP $code"; return; }
+            echo "open,high,low,close,volume,begin" > "$file"
+            jq -r '.chart.result[0] as $r | ($r.indicators.quote[0]) as $q
+              | range(0; ($r.timestamp | length))
+              | select($q.close[.] != null and $q.open[.] != null and $q.high[.] != null and $q.low[.] != null)
+              | [ $q.open[.], $q.high[.], $q.low[.], $q.close[.], ($q.volume[.] // 0), ($r.timestamp[.] | todate) ]
+              | @csv' "$raw" 2>/dev/null | tr -d '"' >> "$file"
+            local total=$(( $(wc -l < "$file") - 1 ))
+            if [ "$total" -lt 400 ]; then echo "Yahoo $sym: только $total свечей — пропускаем"; rm -f "$file"
+            else echo "Yahoo $sym -> $(basename "$file"): $total свечей"; fi
+            sleep 1
+          }
+
+          echo "=== Фьючерсы Мосбиржи: склейка контрактов за 10 лет ==="
+          python3 .github/scripts/moex-futures-splice.py "$OUT" $(( $(date -u +%Y) - 10 )) $(date -u +%Y) \
+            || echo "Склейка фьючерсов не удалась"
+
+          echo "=== Акции вне котировальных списков (второй-третий эшелон) ==="
+          # Уровень листинга здесь не проверялся по спискам биржи: взяты
+          # бумаги, которые обычно относят к второму-третьему эшелону.
+          for t in UNAC IRKT KMAZ VSMO LNZL KROT RKKE BLNG MRKC MSRS TGKA OGKB TRMK NMTP GCHE DVEC TGKB ELTZ; do
+            moex "$t" "$OUT/eshelon__$t.csv"
+          done
+
+          echo "=== Иностранные акции ==="
+          for t in AAPL MSFT XOM JPM KO NVDA TSLA AMZN META BABA; do
+            yahoo "$t" "$OUT/mir-akcii__$t.csv"
+          done
+          echo "=== Иностранные ETF ==="
+          for t in SPY QQQ IWM EEM GLD TLT XLE VNQ; do
+            yahoo "$t" "$OUT/mir-etf__$t.csv"
+          done
+          echo "Итого файлов: $(ls -1 "$OUT" | wc -l)"
+
+      - name: Run high-risk sweep
+        working-directory: tinvest-trader-android
+        run: |
+          export HIGHRISK_DATA_DIR="$PWD/app/build/highrisk-data"
+          set -o pipefail
+          gradle :app:testDebugUnitTest \
+            --tests 'com.tinvesttrader.trading.HighRiskReport' \
+            --no-daemon 2>&1 | tee /tmp/gradle.log || {
+              echo "=== ошибки компиляции ==="
+              grep -E "^e: " /tmp/gradle.log || true
+              exit 1
+            }
+
+      - name: Что удалось скачать
+        if: always()
+        run: cat /tmp/fetch.log
