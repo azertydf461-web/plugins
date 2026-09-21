@@ -22,8 +22,11 @@ data class BotTrade(
 )
 
 data class BotBacktestSettings(
-    /** Комиссия брокера за одну сторону, % от оборота. */
-    val commissionPercent: Double = 0.05,
+    /**
+     * Комиссия брокера за одну сторону, % от оборота. По умолчанию — тариф
+     * «Инвестор» (0,3 % от сделки по акциям), см. README, раздел «Тариф».
+     */
+    val commissionPercent: Double = 0.3,
     /** Половина спреда, теряемая на входе и на выходе, % от цены. */
     val spreadPercent: Double = 0.05,
     /**

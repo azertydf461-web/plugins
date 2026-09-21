@@ -7,7 +7,8 @@ import kotlin.math.min
 data class PortfolioSettings(
     /** Сколько позиций держим одновременно. Это и есть степень диверсификации. */
     val maxPositions: Int = 10,
-    val commissionPercent: Double = 0.05,
+    /** Тариф «Инвестор»: 0,3 % от сделки по акциям. */
+    val commissionPercent: Double = 0.3,
     val spreadPercent: Double = 0.05,
     val atrMultiplier: Double = 2.0,
     val maxStopPercent: Double = 8.0,

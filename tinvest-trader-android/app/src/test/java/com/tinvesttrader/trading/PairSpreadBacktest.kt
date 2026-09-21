@@ -16,10 +16,15 @@ data class PairSettings(
     /** Отклонение, при котором признаётся, что связь сломалась. */
     val stopZ: Double = 4.0,
     val maxHoldDays: Int = 40,
-    val commissionPercent: Double = 0.05,
+    /** Тариф «Инвестор»: 0,3 % от сделки по акциям. */
+    val commissionPercent: Double = 0.3,
     val spreadPercent: Double = 0.05,
-    /** Плата за короткую позицию, годовых от её объёма. */
-    val shortRatePercent: Double = 20.0,
+    /**
+     * Плата за короткую позицию, годовых от её объёма. По таблице тарифа
+     * «Инвестор» непокрытая позиция до 1 млн ₽ стоит 27–29 % годовых на
+     * верхней границе разряда.
+     */
+    val shortRatePercent: Double = 28.0,
 )
 
 data class PairResult(
