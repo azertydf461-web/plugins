@@ -71,9 +71,14 @@ jobs:
         working-directory: tinvest-trader-android
         run: |
           export BACKTEST_DATA_DIR="$PWD/app/build/backtest-data"
+          set -o pipefail
           gradle :app:testDebugUnitTest \
             --tests 'com.tinvesttrader.trading.SberBacktestReport' \
-            --no-daemon --stacktrace
+            --no-daemon 2>&1 | tee /tmp/gradle.log || {
+              echo "=== ошибки компиляции ==="
+              grep -E "^e: |^w: .*error" /tmp/gradle.log || true
+              exit 1
+            }
 
       - name: Print report
         if: always()
