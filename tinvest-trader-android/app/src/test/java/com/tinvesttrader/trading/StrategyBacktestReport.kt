@@ -103,7 +103,7 @@ class StrategyBacktestReport {
         println()
         println("Портфели по классам (5 позиций):")
         data.keys.map { it.substringBefore("__") }.distinct().sorted().forEach { assetClass ->
-            val subset = data.filterKeys { it.startsWith("$assetClass__") }
+            val subset = data.filterKeys { it.startsWith("${assetClass}__") }
             if (subset.size < 5) return@forEach
             val result = PortfolioBacktest.run(subset, PortfolioSettings(maxPositions = 5)) ?: return@forEach
             println(
