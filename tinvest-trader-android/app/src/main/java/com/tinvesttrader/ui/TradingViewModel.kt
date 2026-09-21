@@ -14,7 +14,7 @@ import com.tinvesttrader.trading.RiskManagerHolder
 import com.tinvesttrader.trading.StrategyBacktest
 import com.tinvesttrader.trading.StrategyMode
 import com.tinvesttrader.trading.TradeLedger
-import com.tinvesttrader.trading.SmaCrossoverStrategy
+import com.tinvesttrader.trading.strategyFor
 import com.tinvesttrader.trading.TradingEngine
 import com.tinvesttrader.trading.TradingWorker
 import kotlinx.coroutines.flow.MutableStateFlow
