@@ -21,7 +21,9 @@ class SberBacktestReport {
 
     @Test
     fun printReport() {
-        val dataDir = File(System.getProperty("backtest.data.dir") ?: "build/backtest-data")
+        // Переменная окружения, а не системное свойство: свойства уходят в JVM
+        // самого Gradle и до тестовой JVM не доезжают.
+        val dataDir = File(System.getenv("BACKTEST_DATA_DIR") ?: "app/build/backtest-data")
         if (!dataDir.isDirectory) {
             println("BACKTEST: каталог с котировками не найден (${dataDir.absolutePath}) — пропуск.")
             return
@@ -61,41 +63,41 @@ class SberBacktestReport {
         println(
             row(
                 "Средняя сделка, %",
-                fmt(result.expectancyPercent),
-                fmt(result.legacyExpectancyPercent),
+                num(result.expectancyPercent),
+                num(result.legacyExpectancyPercent),
             ),
         )
         println(
             row(
                 "Итог стратегии, %",
-                fmt(result.totalReturnPercent),
-                fmt(result.legacyTotalReturnPercent),
+                num(result.totalReturnPercent),
+                num(result.legacyTotalReturnPercent),
             ),
         )
         println(
             row(
                 "Худшая сделка, %",
-                fmt(result.worstTradePercent),
-                fmt(result.legacyWorstTradePercent),
+                num(result.worstTradePercent),
+                num(result.legacyWorstTradePercent),
             ),
         )
-        println(row("Доля прибыльных, %", fmt(result.winRatePercent), "-"))
-        println(row("Средняя прибыль, %", fmt(result.averageWinPercent), "-"))
-        println(row("Средний убыток, %", fmt(result.averageLossPercent), "-"))
+        println(row("Доля прибыльных, %", num(result.winRatePercent), "-"))
+        println(row("Средняя прибыль, %", num(result.averageWinPercent), "-"))
+        println(row("Средний убыток, %", num(result.averageLossPercent), "-"))
         println(row("Профит-фактор", result.profitFactor?.let(::fmt) ?: "нет убытков", "-"))
-        println(row("Макс. просадка, %", fmt(result.maxDrawdownPercent), "-"))
+        println(row("Макс. просадка, %", num(result.maxDrawdownPercent), "-"))
         println(row("Выходов по стопу", result.stopLossExits.toString(), "-"))
-        println(row("Среднее удержание, свечей", fmt(result.averageBarsHeld), "-"))
-        println(row("Издержки на сделку, %", fmt(result.costPerTradePercent), "-"))
+        println(row("Среднее удержание, свечей", num(result.averageBarsHeld), "-"))
+        println(row("Издержки на сделку, %", num(result.costPerTradePercent), "-"))
         println()
-        println("Купить и держать за тот же период: ${fmt(result.buyHoldReturnPercent)}%")
+        println("Купить и держать за тот же период: ${num(result.buyHoldReturnPercent)}%")
         println("Вывод: ${result.verdict}")
     }
 
     private fun row(name: String, now: String, before: String): String =
         name.padEnd(28) + now.padStart(14) + before.padStart(16)
 
-    private fun fmt(value: Double): String = String.format(java.util.Locale.US, "%.2f", value)
+    private fun num(value: Double): String = String.format(java.util.Locale.US, "%.2f", value)
 
     /** CSV: open,high,low,close,volume,begin — ровно то, что отдаёт биржа. */
     private fun readCandles(file: File): List<Candle> = file.readLines()

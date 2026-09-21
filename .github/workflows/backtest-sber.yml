@@ -70,16 +70,15 @@ jobs:
       - name: Run strategy backtest
         working-directory: tinvest-trader-android
         run: |
+          export BACKTEST_DATA_DIR="$PWD/app/build/backtest-data"
           gradle :app:testDebugUnitTest \
             --tests 'com.tinvesttrader.trading.SberBacktestReport' \
-            -Dbacktest.data.dir="$PWD/app/build/backtest-data" \
             --no-daemon --stacktrace
 
       - name: Print report
         if: always()
         working-directory: tinvest-trader-android
         run: |
-          cat app/build/backtest-data/*.csv | head -3
-          echo "--- отчёт ---"
-          find app/build/test-results -name '*.xml' -exec sh -c \
-            'sed -n "s/.*<system-out>//p;/<\/system-out>/q" "$1"' _ {} \; || true
+          for f in app/build/backtest-data/*.csv; do
+            echo "$f: $(wc -l < "$f") строк"
+          done
