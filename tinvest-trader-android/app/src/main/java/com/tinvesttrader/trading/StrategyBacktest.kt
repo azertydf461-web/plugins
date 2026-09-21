@@ -190,6 +190,12 @@ object StrategyBacktest {
         )
     }
 
+    /**
+     * Прогон идёт свеча за свечой, а решения принимаются только на тех, где
+     * бот просыпается. Это не мелочь: подтянутый стоп существует лишь с
+     * момента подтягивания, и применять его к свечам, которые были раньше,
+     * значит закрывать сделки по уровню, которого тогда не существовало.
+     */
     private fun simulate(
         candles: List<Candle>,
         settings: BotBacktestSettings,
@@ -197,79 +203,82 @@ object StrategyBacktest {
         val strategy: Strategy =
             if (settings.useFilters) TrendFollowingStrategy() else SmaCrossoverStrategy()
         val costPerTrade = (settings.commissionPercent + settings.spreadPercent) * 2
-        val trades = mutableListOf<BotTrade>()
         val step = settings.pollEveryNBars.coerceAtLeast(1)
+        val trades = mutableListOf<BotTrade>()
 
         var entryBar = -1
         var entryPrice = 0.0
-        var stopPrice = 0.0
         var entryAtr = 0.0
+        var stopPrice = 0.0
         var highWater = 0.0
-        var poll = settings.windowBars
+        var lowSinceLastPoll = Double.MAX_VALUE
+        var bar = settings.windowBars
 
-        while (poll < candles.size - 1) {
-            val window = candles.subList(poll - settings.windowBars + 1, poll + 1)
-            val barsToScan = if (settings.scanMissedBars) step else 1
-            val decision = strategy.evaluate(window, barsToScan)
-            val fillPrice = candles[poll + 1].open.toDouble()
+        while (bar < candles.size - 1) {
+            val isPollBar = (bar - settings.windowBars) % step == 0
+            val candle = candles[bar]
 
-            if (entryBar < 0) {
-                if (decision.signal == Signal.BUY && fillPrice > 0) {
-                    entryBar = poll + 1
-                    entryPrice = fillPrice
-                    entryAtr = Volatility.atr(window) ?: 0.0
-                    highWater = fillPrice
-                    stopPrice = stopPriceFor(entryPrice, window, settings)
+            if (entryBar >= 0) {
+                highWater = maxOf(highWater, candle.high.toDouble())
+                lowSinceLastPoll = minOf(lowSinceLastPoll, candle.low.toDouble())
+
+                // Стоп-заявка у брокера срабатывает в момент касания, на любой
+                // свече. Разрыв цены она не перепрыгивает: если открылись ниже
+                // стопа, исполнение идёт по этому худшему открытию.
+                if (settings.brokerStopOrder && bar > entryBar && candle.low.toDouble() <= stopPrice) {
+                    val fill = minOf(stopPrice, candle.open.toDouble())
+                    trades += trade(candles, entryBar, entryPrice, bar, fill, BotExitReason.STOP_LOSS, costPerTrade)
+                    entryBar = -1
+                    bar++
+                    continue
                 }
-                poll += step
+            }
+
+            if (!isPollBar) {
+                bar++
                 continue
             }
 
+            val window = candles.subList(bar - settings.windowBars + 1, bar + 1)
+            val decision = strategy.evaluate(window, if (settings.scanMissedBars) step else 1)
+            val fillPrice = candles[bar + 1].open.toDouble()
+
+            if (entryBar < 0) {
+                if (decision.signal == Signal.BUY && fillPrice > 0) {
+                    entryBar = bar + 1
+                    entryPrice = fillPrice
+                    entryAtr = Volatility.atr(window) ?: 0.0
+                    highWater = fillPrice
+                    lowSinceLastPoll = Double.MAX_VALUE
+                    stopPrice = stopPriceFor(entryPrice, window, settings)
+                }
+                bar++
+                continue
+            }
+
+            // Мягкий стоп: бот замечает просадку только проснувшись и
+            // закрывается по следующей цене, какой бы она ни была.
+            if (!settings.brokerStopOrder && bar > entryBar && lowSinceLastPoll <= stopPrice) {
+                trades += trade(candles, entryBar, entryPrice, bar + 1, fillPrice, BotExitReason.STOP_LOSS, costPerTrade)
+                entryBar = -1
+                bar++
+                continue
+            }
+            lowSinceLastPoll = Double.MAX_VALUE
+
+            if (decision.signal == Signal.SELL && bar > entryBar) {
+                trades += trade(candles, entryBar, entryPrice, bar + 1, fillPrice, BotExitReason.SIGNAL, costPerTrade)
+                entryBar = -1
+                bar++
+                continue
+            }
+
+            // Стоп подтягивается на пробуждении и только вверх — и действует
+            // со следующей свечи, а не задним числом.
             if (settings.trailingStop && entryAtr > 0) {
-                // Стоп подтягивается от максимума, достигнутого с входа, и
-                // только вверх: прибыльная сделка не должна снова стать
-                // убыточной, но и расширять риск подтягивание не может.
-                highWater = maxOf(
-                    highWater,
-                    (entryBar..minOf(poll, candles.size - 1)).maxOf { candles[it].high.toDouble() },
-                )
                 stopPrice = maxOf(stopPrice, highWater - settings.atrMultiplier * entryAtr)
             }
-
-            if (settings.brokerStopOrder) {
-                // Стоп-заявка живёт у брокера и срабатывает в момент касания,
-                // поэтому проверяется каждая свеча интервала, а не только та,
-                // на которой бот проснулся.
-                val touchBar = (entryBar..minOf(poll, candles.size - 1))
-                    .firstOrNull { it > entryBar && candles[it].low.toDouble() <= stopPrice }
-                if (touchBar != null) {
-                    // Если свеча открылась ниже стопа, брокер исполнит заявку
-                    // по открытию, а не по уровню: разрыв цены не перепрыгнуть
-                    // даже биржевой заявкой, и обещать обратное нельзя.
-                    val fill = minOf(stopPrice, candles[touchBar].open.toDouble())
-                    trades += trade(candles, entryBar, entryPrice, touchBar, fill, BotExitReason.STOP_LOSS, costPerTrade)
-                    entryBar = -1
-                    poll += step
-                    continue
-                }
-            } else {
-                // Мягкий стоп: бот замечает просадку только на проверке и
-                // закрывается по следующей цене, какой бы она ни была.
-                val lowSinceLastPoll = ((poll - step + 1).coerceAtLeast(entryBar)..poll)
-                    .minOfOrNull { candles[it].low.toDouble() } ?: candles[poll].low.toDouble()
-                if (lowSinceLastPoll <= stopPrice) {
-                    trades += trade(candles, entryBar, entryPrice, poll + 1, fillPrice, BotExitReason.STOP_LOSS, costPerTrade)
-                    entryBar = -1
-                    poll += step
-                    continue
-                }
-            }
-
-            if (decision.signal == Signal.SELL) {
-                trades += trade(candles, entryBar, entryPrice, poll + 1, fillPrice, BotExitReason.SIGNAL, costPerTrade)
-                entryBar = -1
-            }
-            poll += step
+            bar++
         }
 
         if (entryBar >= 0) {
