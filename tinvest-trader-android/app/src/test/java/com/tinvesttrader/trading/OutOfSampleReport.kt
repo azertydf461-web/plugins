@@ -59,7 +59,12 @@ class OutOfSampleReport {
         var hold: PortfolioResult? = null
         listOf(3, 5, 10).forEach { slots ->
             if (slots > data.size) return@forEach
-            val result = PortfolioBacktest.run(data, PortfolioSettings(maxPositions = slots)) ?: return@forEach
+            val result = PortfolioBacktest.run(
+                data,
+                // Эталон считаем и с льготой за срок владения, и без неё: ставка
+                // должна дойти до расчёта, иначе обе строки в отчёте совпадут.
+                PortfolioSettings(maxPositions = slots, buyHoldTaxRatePercent = 13.0),
+            ) ?: return@forEach
             hold = hold ?: result
             println(
                 slots.toString().padEnd(9) +
