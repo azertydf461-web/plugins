@@ -182,7 +182,10 @@ def main():
         ("fyuchers-oos", "SF", "HMUZ", "SF_SPYF"),
         ("fyuchers-oos", "NA", "HMUZ", "NA_NASD"),
     ]
+    only = set(sys.argv[4].split(",")) if len(sys.argv) > 4 else None
     for group, root, months, name in roots:
+        if only and root not in only:
+            continue
         try:
             series, failed = splice(root, months, year_from, year_to)
         except Exception as error:  # noqa: BLE001

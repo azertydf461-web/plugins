@@ -1,0 +1,35 @@
+name: backtest-range
+
+# Торговля коридора (покупка у нижней границы, продажа у верхней) на валютных
+# фьючерсах Мосбиржи: доллар, евро, юань и, для сравнения, евро/доллар.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/backtest-range.yml'
+      - 'tinvest-trader-android/app/src/test/java/com/tinvesttrader/trading/CurrencyRangeReport.kt'
+
+jobs:
+  range:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Splice currency futures
+        run: |
+          OUT=tinvest-trader-android/app/build/range-data
+          mkdir -p "$OUT"
+          python3 .github/scripts/moex-futures-splice.py "$OUT" $(( $(date -u +%Y) - 10 )) $(date -u +%Y) Si,Eu,CR,ED
+          ls -la "$OUT"
+      - name: Run range report
+        working-directory: tinvest-trader-android
+        run: |
+          export RANGE_DATA_DIR="$PWD/app/build/range-data"
+          set -o pipefail
+          gradle :app:testDebugUnitTest --tests 'com.tinvesttrader.trading.CurrencyRangeReport' --no-daemon 2>&1 | tee /tmp/gradle.log || {
+            grep -E "^e: " /tmp/gradle.log || true; exit 1; }
