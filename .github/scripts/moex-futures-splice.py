@@ -10,18 +10,27 @@
 import csv
 import json
 import sys
+import time
 import urllib.request
-from datetime import date
+from concurrent.futures import ThreadPoolExecutor
 
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)"}
 MONTHS = "FGHJKMNQUVXZ"  # январь … декабрь
 ROLL_DAYS_BEFORE_EXPIRY = 5
+RETRIES = 5
 
 
 def get_json(url):
-    req = urllib.request.Request(url, headers=UA)
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r)
+    """Биржа периодически отвечает 502 или рвёт соединение — повторяем с паузой."""
+    for attempt in range(RETRIES):
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except Exception as error:  # noqa: BLE001 — любой сетевой сбой лечится повтором
+            if attempt == RETRIES - 1:
+                raise
+            time.sleep(2 ** attempt)
 
 
 def contract_history(code):
@@ -63,22 +72,40 @@ def codes(root, months, year_from, year_to):
             yield f"{root}{m}{year % 10}", year, MONTHS.index(m) + 1
 
 
+def load_contract(code, year):
+    """(дата экспирации, история) или None; сетевой сбой — исключение."""
+    history = contract_history(code)
+    if len(history) < 20:
+        return None
+    # Однозначный код года: контракт мог носить тот же код десятилетием
+    # раньше, оставляем только строки своего года.
+    history = [h for h in history if abs(int(h[0][:4]) - year) <= 1]
+    if len(history) < 20:
+        return None
+    return history[-1][0], history
+
+
 def splice(root, months, year_from, year_to):
+    """Склеенный ряд и число контрактов, которые так и не скачались."""
     contracts = []
-    for code, year, month in codes(root, months, year_from, year_to):
-        # Однозначный код года — десятилетие берём из запрошенного диапазона.
-        history = contract_history(code)
-        if len(history) < 20:
-            continue
-        # Контракт мог получить тот же код десятилетием раньше: оставляем
-        # только строки того года, к которому он относится.
-        history = [h for h in history if abs(int(h[0][:4]) - year) <= 1]
-        if len(history) < 20:
-            continue
-        contracts.append((history[-1][0], history))
+    failed = 0
+
+    def fetch(item):
+        code, year, _ = item
+        try:
+            return load_contract(code, year)
+        except Exception as error:  # noqa: BLE001
+            return error
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for loaded in pool.map(fetch, list(codes(root, months, year_from, year_to))):
+            if isinstance(loaded, Exception):
+                failed += 1
+            elif loaded is not None:
+                contracts.append(loaded)
     contracts.sort()
     if not contracts:
-        return []
+        return [], failed
 
     series = []
     current = None
@@ -107,38 +134,71 @@ def splice(root, months, year_from, year_to):
         if series and d <= series[-1][0]:
             continue
         series.append(cur_by_date[d])
-    return series
+    return series, failed
 
 
 def main():
     out_dir, year_from, year_to = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-    # Корень контракта, его месяцы и имя файла.
+    # Группа файла, корень контракта, его месяцы и имя файла.
+    # «fyuchers» — шесть контрактов, на которых зацепка была найдена;
+    # «fyuchers-oos» — отложенная выборка: контракты, которых система не
+    # видела, когда делался вывод. Brent и газ в первом прогоне не скачались,
+    # поэтому они честно относятся ко второй группе.
     roots = [
-        ("Si", "HMUZ", "Si_USDRUB"),
-        ("RI", "HMUZ", "RI_RTS"),
-        ("MX", "HMUZ", "MX_IMOEX"),
-        ("SR", "HMUZ", "SR_SBER"),
-        ("GZ", "HMUZ", "GZ_GAZP"),
-        ("GD", "HMUZ", "GD_ZOLOTO"),
-        ("BR", MONTHS, "BR_BRENT"),
-        ("NG", MONTHS, "NG_GAZ"),
+        ("fyuchers", "Si", "HMUZ", "Si_USDRUB"),
+        ("fyuchers", "RI", "HMUZ", "RI_RTS"),
+        ("fyuchers", "MX", "HMUZ", "MX_IMOEX"),
+        ("fyuchers", "SR", "HMUZ", "SR_SBER"),
+        ("fyuchers", "GZ", "HMUZ", "GZ_GAZP"),
+        ("fyuchers", "GD", "HMUZ", "GD_ZOLOTO"),
+        ("fyuchers-oos", "BR", MONTHS, "BR_BRENT"),
+        ("fyuchers-oos", "NG", MONTHS, "NG_GAZ"),
+        ("fyuchers-oos", "Eu", "HMUZ", "Eu_EURRUB"),
+        ("fyuchers-oos", "CR", "HMUZ", "CR_CNYRUB"),
+        ("fyuchers-oos", "ED", "HMUZ", "ED_EURUSD"),
+        ("fyuchers-oos", "SV", "HMUZ", "SV_SEREBRO"),
+        ("fyuchers-oos", "PT", "HMUZ", "PT_PLATINA"),
+        ("fyuchers-oos", "PD", "HMUZ", "PD_PALLADIY"),
+        ("fyuchers-oos", "LK", "HMUZ", "LK_LKOH"),
+        ("fyuchers-oos", "RN", "HMUZ", "RN_ROSN"),
+        ("fyuchers-oos", "VB", "HMUZ", "VB_VTBR"),
+        ("fyuchers-oos", "NK", "HMUZ", "NK_NVTK"),
+        ("fyuchers-oos", "GM", "HMUZ", "GM_GMKN"),
+        ("fyuchers-oos", "TT", "HMUZ", "TT_TATN"),
+        ("fyuchers-oos", "MG", "HMUZ", "MG_MGNT"),
+        ("fyuchers-oos", "CH", "HMUZ", "CH_CHMF"),
+        ("fyuchers-oos", "NL", "HMUZ", "NL_NLMK"),
+        ("fyuchers-oos", "AL", "HMUZ", "AL_ALRS"),
+        ("fyuchers-oos", "MT", "HMUZ", "MT_MTSS"),
+        ("fyuchers-oos", "ME", "HMUZ", "ME_MOEX"),
+        ("fyuchers-oos", "RT", "HMUZ", "RT_RTKM"),
+        ("fyuchers-oos", "PZ", "HMUZ", "PZ_PLZL"),
+        ("fyuchers-oos", "PH", "HMUZ", "PH_PHOR"),
+        ("fyuchers-oos", "HY", "HMUZ", "HY_HYDR"),
+        ("fyuchers-oos", "FS", "HMUZ", "FS_FEES"),
+        ("fyuchers-oos", "SN", "HMUZ", "SN_SNGS"),
+        ("fyuchers-oos", "SG", "HMUZ", "SG_SNGSP"),
+        ("fyuchers-oos", "AF", "HMUZ", "AF_AFLT"),
+        ("fyuchers-oos", "SF", "HMUZ", "SF_SPYF"),
+        ("fyuchers-oos", "NA", "HMUZ", "NA_NASD"),
     ]
-    for root, months, name in roots:
+    for group, root, months, name in roots:
         try:
-            series = splice(root, months, year_from, year_to)
-        except Exception as error:
+            series, failed = splice(root, months, year_from, year_to)
+        except Exception as error:  # noqa: BLE001
             print(f"  {root}: не удалось ({error})", flush=True)
             continue
+        note = f", не скачалось контрактов: {failed}" if failed else ""
         if len(series) < 400:
-            print(f"  {root}: только {len(series)} дней — пропуск", flush=True)
+            print(f"  {root}: только {len(series)} дней — пропуск{note}", flush=True)
             continue
-        path = f"{out_dir}/fyuchers__{name}.csv"
+        path = f"{out_dir}/{group}__{name}.csv"
         with open(path, "w", newline="", encoding="utf-8") as handle:
             w = csv.writer(handle)
             w.writerow(["open", "high", "low", "close", "volume", "begin"])
             for d, o, h, l, c, v in series:
                 w.writerow([f"{o:.6f}", f"{h:.6f}", f"{l:.6f}", f"{c:.6f}", int(v), f"{d} 00:00:00"])
-        print(f"  {root} -> {path.split('/')[-1]}: {len(series)} дней, с {series[0][0]}", flush=True)
+        print(f"  {root} -> {path.split('/')[-1]}: {len(series)} дней, с {series[0][0]}{note}", flush=True)
 
 
 if __name__ == "__main__":

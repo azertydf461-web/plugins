@@ -24,7 +24,8 @@ class HighRiskReport {
     private class ClassCosts(val title: String, val commission: Double, val spread: Double)
 
     private val classes = linkedMapOf(
-        "fyuchers" to ClassCosts("Фьючерсы Мосбиржи (склеенные)", 0.1, 0.02),
+        "fyuchers" to ClassCosts("Фьючерсы Мосбиржи (склеенные) — шесть исходных", 0.1, 0.02),
+        "fyuchers-oos" to ClassCosts("Фьючерсы Мосбиржи — отложенная выборка", 0.1, 0.02),
         "eshelon" to ClassCosts("Акции вне котировальных списков", 0.3, 0.5),
         "mir-akcii" to ClassCosts("Иностранные акции", 0.3, 0.1),
         "mir-etf" to ClassCosts("Иностранные ETF", 0.3, 0.1),
