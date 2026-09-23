@@ -1,0 +1,54 @@
+name: backtest-crypto
+
+# Пробой канала на криптовалюте: дневные свечи (биткоин, эфир и отложенная
+# выборка других монет) и часовые свечи биткоина и эфира.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/backtest-crypto.yml'
+      - '.github/scripts/binance-hourly.py'
+      - 'tinvest-trader-android/app/src/test/java/com/tinvesttrader/trading/CryptoReport.kt'
+
+jobs:
+  crypto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Download candles
+        run: |
+          set -uo pipefail
+          OUT=tinvest-trader-android/app/build/crypto-data
+          mkdir -p "$OUT"
+          yahoo() {
+            local sym="$1" file="$2" raw=/tmp/y.json
+            code=$(curl -sS --max-time 60 -o "$raw" -w '%{http_code}' -A "Mozilla/5.0 (X11; Linux x86_64)" \
+              "https://query1.finance.yahoo.com/v8/finance/chart/$sym?range=10y&interval=1d") || { echo "$sym: запрос не прошёл"; return; }
+            [ "$code" = "200" ] || { echo "$sym: HTTP $code"; return; }
+            echo "open,high,low,close,volume,begin" > "$file"
+            jq -r '.chart.result[0] as $r | ($r.indicators.quote[0]) as $q
+              | range(0; ($r.timestamp | length))
+              | select($q.close[.] != null and $q.open[.] != null and $q.high[.] != null and $q.low[.] != null)
+              | [ $q.open[.], $q.high[.], $q.low[.], $q.close[.], ($q.volume[.] // 0), ($r.timestamp[.] | todate) ] | @csv' "$raw" | tr -d '"' >> "$file"
+            echo "$sym -> $(basename "$file"): $(( $(wc -l < "$file") - 1 )) свечей"
+            sleep 1
+          }
+          for s in BTC ETH; do yahoo "$s-USD" "$OUT/osnovnye__$s.csv"; done
+          for s in SOL XRP ADA DOGE LTC BNB TRX LINK; do yahoo "$s-USD" "$OUT/oos__$s.csv"; done
+          for p in BTCUSDT ETHUSDT; do
+            python3 .github/scripts/binance-hourly.py /tmp "$p" 2018 && mv "/tmp/${p}__1h.csv" "$OUT/chas__${p}.csv" || echo "$p 1h не удалось"
+          done
+          ls -la "$OUT"
+      - name: Run crypto report
+        working-directory: tinvest-trader-android
+        run: |
+          export CRYPTO_DATA_DIR="$PWD/app/build/crypto-data"
+          set -o pipefail
+          gradle :app:testDebugUnitTest --tests 'com.tinvesttrader.trading.CryptoReport' --no-daemon 2>&1 | tee /tmp/gradle.log || {
+            grep -E "^e: " /tmp/gradle.log || true; exit 1; }
