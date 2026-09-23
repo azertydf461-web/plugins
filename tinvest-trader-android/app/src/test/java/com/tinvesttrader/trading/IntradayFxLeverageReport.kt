@@ -170,8 +170,6 @@ class IntradayFxLeverageReport {
                 }
                 continue
             }
-            // Окно не должно захватывать вчерашний день.
-            if (day(candles[i - warmup]) != day(candles[i])) continue
             pending = rule(i, side)
         }
         return trades
