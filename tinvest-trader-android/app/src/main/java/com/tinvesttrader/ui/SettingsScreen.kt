@@ -361,16 +361,14 @@ fun SettingsScreen(
 }
 
 private val BOT_INTERVALS = listOf(
-    "CANDLE_INTERVAL_15_MIN" to "15 минут (рекомендуется)",
+    "CANDLE_INTERVAL_DAY" to "1 день (рекомендуется)",
     "CANDLE_INTERVAL_HOUR" to "1 час",
-    "CANDLE_INTERVAL_5_MIN" to "5 минут",
 )
 
 /**
- * Раздел про риск и таймфрейм. Вынесен в настройки, потому что оба параметра
- * меняют поведение бота сильнее, чем что-либо ещё: слишком мелкие свечи он
- * не успевает отсматривать, а стоп определяет, сколько он теряет на неудачной
- * сделке.
+ * Правило одно — пробой канала, поэтому выбирать здесь можно только таймфрейм
+ * и размер позиции. Фильтры входа, стоп у брокера и его подтягивание убраны:
+ * на истории каждое из них уменьшало результат.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -378,37 +376,11 @@ private fun RiskSettingsSection(state: SettingsUiState, viewModel: SettingsViewM
     Column(Modifier.padding(top = 16.dp)) {
         HorizontalDivider()
         Text(
-            "Стратегия",
+            StrategyMode.DONCHIAN.title,
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 12.dp),
         )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StrategyMode.entries.forEach { mode ->
-                FilterChip(
-                    selected = state.strategyMode == mode.key,
-                    onClick = { viewModel.setStrategyMode(mode.key) },
-                    label = { Text(mode.title) },
-                )
-            }
-        }
-        Text(
-            StrategyMode.fromKey(state.strategyMode).description,
-            style = MaterialTheme.typography.bodySmall,
-        )
-
-        if (state.strategyMode == "SIZING") {
-            NumberSetting(
-                label = "Базовый размер позиции, лотов",
-                value = state.baseLots.toDouble(),
-                onValueChange = { viewModel.setBaseLots(it) },
-            )
-            Text(
-                "Полный объём при всех пройденных фильтрах. Непройденный фильтр " +
-                    "уменьшает объём пропорционально, но не ниже одного лота — " +
-                    "дробить лот биржа не даёт.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        Text(StrategyMode.DONCHIAN.description, style = MaterialTheme.typography.bodySmall)
 
         Text(
             "Таймфрейм бота",
@@ -416,9 +388,8 @@ private fun RiskSettingsSection(state: SettingsUiState, viewModel: SettingsViewM
             modifier = Modifier.padding(top = 12.dp),
         )
         Text(
-            "Бот просыпается раз в 15 минут — это ограничение Android. Свечи мельче " +
-                "этого он видит не все, поэтому 5 минут оставлены только для " +
-                "сравнения на истории.",
+            "Дневные свечи: канал 20 дней на вход и 10 на выход. Часовые: 120 и 60 свечей. " +
+                "Свечи мельче часа убраны — на истории они давали только убыток.",
             style = MaterialTheme.typography.bodySmall,
         )
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -431,82 +402,15 @@ private fun RiskSettingsSection(state: SettingsUiState, viewModel: SettingsViewM
             }
         }
 
-        Text(
-            "Стоп-лосс",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(top = 16.dp),
+        NumberSetting(
+            label = "Размер покупки, лотов",
+            value = state.baseLots.toDouble(),
+            onValueChange = { viewModel.setBaseLots(it) },
         )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = state.stopMode == "ATR",
-                onClick = { viewModel.setStopMode("ATR") },
-                label = { Text("По волатильности") },
-            )
-            FilterChip(
-                selected = state.stopMode == "PERCENT",
-                onClick = { viewModel.setStopMode("PERCENT") },
-                label = { Text("Фиксированный %") },
-            )
-        }
         Text(
-            if (state.stopMode == "ATR") {
-                "Расстояние до стопа считается от размаха свечей этой бумаги. " +
-                    "Одинаковый для всех процент либо режет позицию на обычном шуме, " +
-                    "либо пропускает реальное падение."
-            } else {
-                "Одно и то же расстояние для любой бумаги — просто, но не учитывает, " +
-                    "насколько она подвижна."
-            },
-            style = MaterialTheme.typography.bodySmall,
-        )
-
-        if (state.stopMode == "ATR") {
-            NumberSetting(
-                label = "Множитель ATR",
-                value = state.atrMultiplier,
-                onValueChange = { viewModel.setAtrMultiplier(it) },
-            )
-        } else {
-            NumberSetting(
-                label = "Стоп-лосс, % от цены входа",
-                value = state.stopLossPercent,
-                onValueChange = { viewModel.setStopLossPercent(it) },
-            )
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text("Стоп-заявка у брокера", style = MaterialTheme.typography.titleSmall)
-            Switch(
-                checked = state.protectiveStopEnabled,
-                onCheckedChange = { viewModel.setProtectiveStopEnabled(it) },
-            )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text("Подтягивать стоп за ценой", style = MaterialTheme.typography.titleSmall)
-            Switch(
-                checked = state.trailingStopEnabled,
-                onCheckedChange = { viewModel.setTrailingStopEnabled(it) },
-            )
-        }
-        Text(
-            "Пока сделка в прибыли, стоп переставляется вслед за максимумом цены и " +
-                "только вверх. Это не даёт прибыльной сделке снова стать убыточной, " +
-                "но иногда закрывает позицию на откате раньше времени.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-
-        Text(
-            "Включено: после покупки бот выставляет стоп-заявку на сервере брокера, " +
-                "и она срабатывает сама, даже когда приложение выгружено из памяти. " +
-                "Выключено: стоп сработает только на очередной проверке — на разрыве " +
-                "цены убыток окажется больше. В песочнице стоп-заявки может не быть, " +
-                "тогда бот честно напишет об этом в журнале.",
+            "Стоп-заявки у брокера нет: позиция закрывается, когда цена уходит ниже " +
+                "минимума канала выхода. Между проверками бота цена может уйти ниже " +
+                "этого уровня — продажа произойдёт на следующей проверке.",
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -566,7 +470,7 @@ private fun DiagnosticCard(step: DiagnosticStep) {
  * а не UX-недоработка: случайный тап не должен переключать реальный счёт.
  */
 @Composable
-private fun LiveModeConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+internal fun LiveModeConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     var input by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,

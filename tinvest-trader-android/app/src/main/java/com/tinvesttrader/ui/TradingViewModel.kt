@@ -12,7 +12,8 @@ import com.tinvesttrader.trading.BotBacktestSettings
 import com.tinvesttrader.trading.LedgerStats
 import com.tinvesttrader.trading.RiskManagerHolder
 import com.tinvesttrader.trading.StrategyBacktest
-import com.tinvesttrader.trading.StrategyMode
+import com.tinvesttrader.trading.DonchianBreakoutStrategy
+import com.tinvesttrader.trading.channelFor
 import com.tinvesttrader.trading.TradeLedger
 import com.tinvesttrader.trading.strategyFor
 import com.tinvesttrader.trading.TradingEngine
@@ -47,13 +48,12 @@ enum class BotBacktestRange(
     val days: Long,
     val pollEveryNBars: Int,
 ) {
-    LIVE_LIKE("Как сейчас: 5 мин, 14 дней", "CANDLE_INTERVAL_5_MIN", 14, 3),
-    FIFTEEN_MIN("15 мин, 30 дней", "CANDLE_INTERVAL_15_MIN", 30, 1),
-    HOUR("Часовые, 6 месяцев", "CANDLE_INTERVAL_HOUR", 180, 1),
+    DAY("Дневные, 5 лет", "CANDLE_INTERVAL_DAY", 1825, 1),
+    HOUR("Часовые, 1 год", "CANDLE_INTERVAL_HOUR", 365, 1),
 }
 
 data class BotBacktestUiState(
-    val range: BotBacktestRange = BotBacktestRange.LIVE_LIKE,
+    val range: BotBacktestRange = BotBacktestRange.DAY,
     val running: Boolean = false,
     val stage: String? = null,
     val result: BotBacktestResult? = null,
@@ -112,14 +112,14 @@ class TradingViewModel(application: Application) : AndroidViewModel(application)
                     StrategyBacktest.run(
                         intervalTitle = range.title,
                         candles = candles,
+                        // Та же логика, что у живого бота: чистый пробой, без стопов.
                         settings = BotBacktestSettings(
                             pollEveryNBars = range.pollEveryNBars,
-                            useFilters = StrategyMode.fromKey(tokenStore.strategyMode) == StrategyMode.TREND,
-                            trailingStop = tokenStore.trailingStopEnabled,
-                            atrStop = tokenStore.stopMode == "ATR",
-                            atrMultiplier = tokenStore.atrMultiplier,
-                            stopLossPercent = tokenStore.stopLossPercent,
-                            brokerStopOrder = tokenStore.protectiveStopEnabled,
+                            strategy = channelFor(range.interval).let {
+                                DonchianBreakoutStrategy(it.entry, it.exit)
+                            },
+                            stops = false,
+                            trailingStop = false,
                         ),
                     )
                 } to candles.size

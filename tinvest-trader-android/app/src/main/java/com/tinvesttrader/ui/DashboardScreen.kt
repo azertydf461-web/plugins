@@ -49,6 +49,7 @@ fun DashboardScreen(
     viewModel: TradingViewModel = viewModel(),
     onOpenSettings: () -> Unit,
     onOpenValidation: () -> Unit,
+    onOpenCrypto: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsState()
     val decisions by viewModel.decisions.collectAsState()
@@ -120,7 +121,13 @@ fun DashboardScreen(
                             modifier = Modifier.padding(start = 8.dp),
                         ) { Text("Настройки") }
                     }
-                    OutlinedButton(onClick = onOpenValidation) { Text("Проверка бота") }
+                    Row {
+                        OutlinedButton(onClick = onOpenValidation) { Text("Проверка бота") }
+                        OutlinedButton(
+                            onClick = onOpenCrypto,
+                            modifier = Modifier.padding(start = 8.dp),
+                        ) { Text("Криптовалюта") }
+                    }
                     state.statusMessage?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall)
                     }

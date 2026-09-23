@@ -25,6 +25,9 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Unit tests (crypto client and trading cycle)
+        run: gradle testDebugUnitTest --tests 'com.tinvesttrader.crypto.*' --no-daemon --stacktrace
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon --stacktrace
 

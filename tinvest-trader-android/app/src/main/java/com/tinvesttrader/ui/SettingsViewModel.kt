@@ -38,7 +38,7 @@ data class SettingsUiState(
     val catalogBusy: Boolean = false,
     val diagnostics: List<DiagnosticStep> = emptyList(),
     val diagnosticsRunning: Boolean = false,
-    val candleInterval: String = "CANDLE_INTERVAL_15_MIN",
+    val candleInterval: String = "CANDLE_INTERVAL_DAY",
     val stopMode: String = "ATR",
     val stopLossPercent: Double = 3.0,
     val atrMultiplier: Double = 2.0,

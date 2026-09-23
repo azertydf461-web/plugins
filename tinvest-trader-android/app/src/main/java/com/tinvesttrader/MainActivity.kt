@@ -12,10 +12,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.tinvesttrader.ui.BotValidationScreen
+import com.tinvesttrader.ui.CryptoScreen
 import com.tinvesttrader.ui.DashboardScreen
 import com.tinvesttrader.ui.SettingsScreen
 
-private enum class Screen { DASHBOARD, SETTINGS, VALIDATION }
+private enum class Screen { DASHBOARD, SETTINGS, VALIDATION, CRYPTO }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -37,8 +38,10 @@ private fun AppRoot() {
         Screen.DASHBOARD -> DashboardScreen(
             onOpenSettings = { screen = Screen.SETTINGS },
             onOpenValidation = { screen = Screen.VALIDATION },
+            onOpenCrypto = { screen = Screen.CRYPTO },
         )
         Screen.SETTINGS -> SettingsScreen(onBack = { screen = Screen.DASHBOARD })
         Screen.VALIDATION -> BotValidationScreen(onBack = { screen = Screen.DASHBOARD })
+        Screen.CRYPTO -> CryptoScreen(onBack = { screen = Screen.DASHBOARD })
     }
 }

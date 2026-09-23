@@ -61,7 +61,10 @@ class SecureTokenStore(context: Context) {
      * разу не доберётся.
      */
     var candleInterval: String
-        get() = prefs.getString(KEY_INTERVAL, DEFAULT_INTERVAL) ?: DEFAULT_INTERVAL
+        // Минутные таймфреймы на истории убыточны; сохранённое старое значение
+        // переводится на дневные свечи, а не тянет бота обратно в минус.
+        get() = prefs.getString(KEY_INTERVAL, DEFAULT_INTERVAL)
+            ?.takeIf { it == INTERVAL_DAY || it == INTERVAL_HOUR } ?: DEFAULT_INTERVAL
         set(value) = prefs.edit().putString(KEY_INTERVAL, value).apply()
 
     /** "PERCENT" — фиксированный процент, "ATR" — от волатильности бумаги. */
@@ -123,28 +126,78 @@ class SecureTokenStore(context: Context) {
         get() = prefs.getString(KEY_LAST_CANDLE, null)
         set(value) = prefs.edit().putString(KEY_LAST_CANDLE, value).apply()
 
-    private companion object {
-        const val KEY_SANDBOX_TOKEN = "sandbox_token"
-        const val KEY_LIVE_TOKEN = "live_token"
-        const val KEY_LIVE_ENABLED = "live_trading_enabled"
-        const val KEY_ACCOUNT_ID = "account_id"
-        const val KEY_FIGI = "instrument_figi"
-        const val KEY_ACCOUNT_LABEL = "account_label"
-        const val KEY_FIGI_LABEL = "instrument_label"
-        const val KEY_INTERVAL = "candle_interval"
-        const val KEY_STOP_MODE = "stop_mode"
-        const val KEY_STOP_PERCENT = "stop_loss_percent"
-        const val KEY_ATR_MULTIPLIER = "atr_multiplier"
-        const val KEY_PROTECTIVE_STOP = "protective_stop_enabled"
-        const val KEY_STOP_ORDER_ID = "protective_stop_order_id"
-        const val KEY_STRATEGY = "strategy_mode"
-        const val KEY_TRAILING = "trailing_stop_enabled"
-        const val KEY_BASE_LOTS = "base_lots"
-        const val KEY_HIGH_WATER = "position_high_water"
-        const val KEY_STOP_PRICE = "protective_stop_price"
-        const val DEFAULT_STRATEGY = "TREND"
-        const val KEY_LAST_CANDLE = "last_processed_candle_time"
-        const val DEFAULT_INTERVAL = "CANDLE_INTERVAL_15_MIN"
-        const val DEFAULT_STOP_MODE = "ATR"
+    // ---- Криптобиржа (Bybit, спот) ----
+
+    var cryptoApiKey: String?
+        get() = prefs.getString(KEY_CRYPTO_API_KEY, null)
+        set(value) = prefs.edit().putString(KEY_CRYPTO_API_KEY, value).apply()
+
+    var cryptoApiSecret: String?
+        get() = prefs.getString(KEY_CRYPTO_API_SECRET, null)
+        set(value) = prefs.edit().putString(KEY_CRYPTO_API_SECRET, value).apply()
+
+    /** true — боевой контур биржи. Включается только после ввода фразы подтверждения. */
+    var cryptoLiveEnabled: Boolean
+        get() = prefs.getBoolean(KEY_CRYPTO_LIVE, false)
+        set(value) = prefs.edit().putBoolean(KEY_CRYPTO_LIVE, value).apply()
+
+    var cryptoSymbol: String
+        get() = prefs.getString(KEY_CRYPTO_SYMBOL, "BTCUSDT") ?: "BTCUSDT"
+        set(value) = prefs.edit().putString(KEY_CRYPTO_SYMBOL, value.trim().uppercase()).apply()
+
+    /** Сумма одной покупки в валюте котировки (USDT). */
+    var cryptoOrderQuoteAmount: Double
+        get() = prefs.getString(KEY_CRYPTO_AMOUNT, null)?.toDoubleOrNull() ?: 50.0
+        set(value) = prefs.edit().putString(KEY_CRYPTO_AMOUNT, value.toString()).apply()
+
+    /** INTERVAL_DAY или INTERVAL_HOUR — те же значения, что у бота Т-Инвестиций. */
+    var cryptoInterval: String
+        get() = prefs.getString(KEY_CRYPTO_INTERVAL, INTERVAL_DAY)
+            ?.takeIf { it == INTERVAL_DAY || it == INTERVAL_HOUR } ?: INTERVAL_DAY
+        set(value) = prefs.edit().putString(KEY_CRYPTO_INTERVAL, value).apply()
+
+    var cryptoLastCandleTime: String?
+        get() = prefs.getString(KEY_CRYPTO_LAST_CANDLE, null)
+        set(value) = prefs.edit().putString(KEY_CRYPTO_LAST_CANDLE, value).apply()
+
+    var cryptoPositionBaseline: String?
+        get() = prefs.getString(KEY_CRYPTO_BASELINE, null)
+        set(value) = prefs.edit().putString(KEY_CRYPTO_BASELINE, value).apply()
+
+    companion object {
+        const val INTERVAL_DAY = "CANDLE_INTERVAL_DAY"
+        const val INTERVAL_HOUR = "CANDLE_INTERVAL_HOUR"
+
+        private const val KEY_CRYPTO_API_KEY = "crypto_api_key"
+        private const val KEY_CRYPTO_API_SECRET = "crypto_api_secret"
+        private const val KEY_CRYPTO_LIVE = "crypto_live_enabled"
+        private const val KEY_CRYPTO_SYMBOL = "crypto_symbol"
+        private const val KEY_CRYPTO_AMOUNT = "crypto_order_quote_amount"
+        private const val KEY_CRYPTO_INTERVAL = "crypto_interval"
+        private const val KEY_CRYPTO_LAST_CANDLE = "crypto_last_candle_time"
+        private const val KEY_CRYPTO_BASELINE = "crypto_position_baseline"
+
+        private const val KEY_SANDBOX_TOKEN = "sandbox_token"
+        private const val KEY_LIVE_TOKEN = "live_token"
+        private const val KEY_LIVE_ENABLED = "live_trading_enabled"
+        private const val KEY_ACCOUNT_ID = "account_id"
+        private const val KEY_FIGI = "instrument_figi"
+        private const val KEY_ACCOUNT_LABEL = "account_label"
+        private const val KEY_FIGI_LABEL = "instrument_label"
+        private const val KEY_INTERVAL = "candle_interval"
+        private const val KEY_STOP_MODE = "stop_mode"
+        private const val KEY_STOP_PERCENT = "stop_loss_percent"
+        private const val KEY_ATR_MULTIPLIER = "atr_multiplier"
+        private const val KEY_PROTECTIVE_STOP = "protective_stop_enabled"
+        private const val KEY_STOP_ORDER_ID = "protective_stop_order_id"
+        private const val KEY_STRATEGY = "strategy_mode"
+        private const val KEY_TRAILING = "trailing_stop_enabled"
+        private const val KEY_BASE_LOTS = "base_lots"
+        private const val KEY_HIGH_WATER = "position_high_water"
+        private const val KEY_STOP_PRICE = "protective_stop_price"
+        private const val DEFAULT_STRATEGY = "DONCHIAN"
+        private const val KEY_LAST_CANDLE = "last_processed_candle_time"
+        private const val DEFAULT_INTERVAL = INTERVAL_DAY
+        private const val DEFAULT_STOP_MODE = "ATR"
     }
 }

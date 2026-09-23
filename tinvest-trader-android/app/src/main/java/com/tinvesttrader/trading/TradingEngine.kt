@@ -44,7 +44,9 @@ class TradingEngine(
 
         val interval = tokenStore.candleInterval
         val candles = try {
-            repository.getRecentCandles(figi, interval, lookbackMinutesFor(interval))
+            // Только закрытые свечи: незакрытая дневная свеча — это половина
+            // дня, и пробой по ней может исчезнуть к вечеру.
+            repository.getHistory(figi, interval, historyDaysFor(interval)).filter { it.isComplete }
         } catch (e: Exception) {
             return record(
                 figi = figi,
@@ -90,40 +92,13 @@ class TradingEngine(
         val currentLots = position?.quantity?.toDouble()?.toLong() ?: 0L
         val lastPrice = decision.indicators.lastPrice
 
-        if (position != null && currentLots > 0) {
-            val entryPrice = position.averagePositionPrice.toDouble()
-            val guardNotes = ensureProtectiveStop(accountId, figi, currentLots, entryPrice, candles)
-
-            // Стоп-лосс имеет приоритет над сигналом стратегии. Проверяется по
-            // минимумам всех свечей с прошлого визита, а не по текущей цене:
-            // цена могла сходить к стопу и вернуться, пока бот спал.
-            val stopPrice = tokenStore.protectiveStopPrice.takeIf { it > 0 }
-                ?: riskManager.stopLevelFor(entryPrice, Volatility.atr(candles)).price
-            val stopLoss = riskManager.checkStopLossOverBars(
-                averageEntryPrice = entryPrice,
-                stopPrice = stopPrice,
-                candlesSinceLastCheck = candles.takeLast(missedBars.coerceAtLeast(1)),
-                currentPrice = lastPrice,
-            )
-            if (stopLoss.allowed) {
-                cancelProtectiveStop(accountId)
-                return executeOrder(
-                    accountId = accountId,
-                    figi = figi,
-                    lots = currentLots,
-                    direction = OrderDirection.SELL,
-                    action = DecisionAction.STOP_LOSS,
-                    headline = "Стоп-лосс: закрываю позицию",
-                    marketReasoning = decision.reasoning,
-                    riskReasoning = guardNotes + stopLoss.reasoning,
-                    indicators = indicators,
-                )
-            }
-        } else if (currentLots <= 0 && tokenStore.protectiveStopOrderId != null) {
-            // Позиции нет, а стоп-заявка числится: значит, она уже сработала
-            // или позицию закрыли руками. Снимаем, чтобы она не выстрелила по
-            // следующей покупке с чужой ценой.
+        // Стопы у брокера больше не ставятся: роль стопа играет нижняя граница
+        // канала. Заявка, оставшаяся от прошлых версий бота, снимается, чтобы
+        // не выбросить из позиции раньше правила.
+        val leftoverStopNotes = if (tokenStore.protectiveStopOrderId != null) {
             cancelProtectiveStop(accountId)
+        } else {
+            emptyList()
         }
 
         return when (decision.signal) {
@@ -132,6 +107,7 @@ class TradingEngine(
                 // даёт неполную позицию, но сделка всё равно происходит.
                 val orderLots = orderLotsFor(decision)
                 val verdict = riskManager.checkCanOpenPosition(currentLots, orderLots)
+                    .let { it.copy(reasoning = leftoverStopNotes + it.reasoning) }
                 if (!verdict.allowed) {
                     record(
                         figi = figi,
@@ -142,26 +118,11 @@ class TradingEngine(
                         indicators = indicators,
                     )
                 } else {
-                    val bought = executeOrder(
+                    executeOrder(
                         accountId, figi, orderLots, OrderDirection.BUY,
                         DecisionAction.BUY, "Покупаю $orderLots лот(ов)",
                         decision.reasoning, verdict.reasoning, indicators,
                     )
-                    // Защита ставится сразу после покупки: незащищённая
-                    // позиция не должна пережить даже один цикл бота.
-                    if (bought.decisionAction == DecisionAction.BUY) {
-                        val notes = ensureProtectiveStop(
-                            accountId, figi, currentLots + orderLots, lastPrice, candles,
-                        )
-                        record(
-                            figi = figi,
-                            action = DecisionAction.BUY,
-                            headline = "Защита позиции",
-                            riskReasoning = notes,
-                            indicators = indicators,
-                        )
-                    }
-                    bought
                 }
             }
 
@@ -179,12 +140,11 @@ class TradingEngine(
                         indicators = indicators,
                     )
                 } else {
-                    val cancelNote = cancelProtectiveStop(accountId)
                     executeOrder(
                         accountId, figi, currentLots, OrderDirection.SELL,
                         DecisionAction.SELL, "Продаю $currentLots лот(ов)",
                         decision.reasoning,
-                        listOf("Закрывается вся позиция: $currentLots лот(ов).") + cancelNote,
+                        leftoverStopNotes + "Закрывается вся позиция: $currentLots лот(ов).",
                         indicators,
                     )
                 }
@@ -212,7 +172,9 @@ class TradingEngine(
         riskReasoning: List<String>,
         indicators: List<IndicatorReading>,
     ): DecisionRecord {
-        if (riskManager.isKillSwitchActive) {
+        // Аварийная блокировка запрещает только новые покупки: не дать закрыть
+        // позицию значило бы держать убыток дальше именно тогда, когда он велик.
+        if (riskManager.isKillSwitchActive && direction == OrderDirection.BUY) {
             return record(
                 figi, DecisionAction.BLOCKED, "Аварийная блокировка активна",
                 marketReasoning,
@@ -236,129 +198,6 @@ class TradingEngine(
                 indicators = indicators,
             )
         }
-    }
-
-    /**
-     * Ставит защитную стоп-заявку, если её ещё нет. Заявка живёт на сервере
-     * брокера, поэтому срабатывает и когда приложение выгружено. Вызывается
-     * на каждом цикле: если заявка пропала (сработала частично, была снята
-     * вручную), позиция не должна остаться без защиты.
-     */
-    private suspend fun ensureProtectiveStop(
-        accountId: String,
-        figi: String,
-        lots: Long,
-        entryPrice: Double,
-        candles: List<Candle>,
-    ): List<String> {
-        if (!tokenStore.protectiveStopEnabled) {
-            return listOf(
-                "Защитная стоп-заявка отключена в настройках: стоп сработает только " +
-                    "при очередной проверке, а на разрыве цены убыток будет больше.",
-            )
-        }
-        if (lots <= 0 || entryPrice <= 0) return emptyList()
-
-        val atr = Volatility.atr(candles)
-        val level = riskManager.stopLevelFor(entryPrice, atr)
-        val existing = runCatching { repository.getStopOrders(accountId) }.getOrNull()
-        val alive = existing?.firstOrNull { it.figi == figi || it.stopOrderId == tokenStore.protectiveStopOrderId }
-
-        if (alive != null) {
-            tokenStore.protectiveStopOrderId = alive.stopOrderId
-            if (tokenStore.protectiveStopPrice <= 0) tokenStore.protectiveStopPrice = level.price
-            val trailed = trailStopIfPossible(accountId, figi, lots, entryPrice, candles, atr)
-            return listOf(
-                "Защитная стоп-заявка у брокера активна: ${fmt(tokenStore.protectiveStopPrice)}.",
-            ) + trailed
-        }
-
-        return runCatching {
-            repository.placeProtectiveStop(accountId, figi, lots, level.price)
-        }.fold(
-            onSuccess = { id ->
-                tokenStore.protectiveStopOrderId = id
-                tokenStore.protectiveStopPrice = level.price
-                tokenStore.positionHighWaterPrice = entryPrice
-                listOf(
-                    level.explanation,
-                    "Выставлена стоп-заявка у брокера на ${fmt(level.price)} " +
-                        "(${fmt(level.distancePercent)}% от входа). Она сработает сама, " +
-                        "даже если приложение выгружено из памяти.",
-                )
-            },
-            onFailure = { error ->
-                // Песочница стоп-заявки не поддерживает, и это не повод молча
-                // остаться без защиты: пользователь должен знать, что стоп
-                // сейчас держится только на проверках бота.
-                tokenStore.protectiveStopOrderId = null
-                tokenStore.protectiveStopPrice = level.price
-                listOf(
-                    level.explanation,
-                    "Брокер не принял стоп-заявку: ${error.message}",
-                    "Позиция остаётся под мягким стопом — он сработает только на " +
-                        "очередной проверке бота, и на разрыве цены убыток окажется больше.",
-                )
-            },
-        )
-    }
-
-    /**
-     * Подтягивает стоп вслед за ценой: уровень отсчитывается от максимума,
-     * достигнутого с момента входа. Так прибыльная сделка не превращается
-     * обратно в убыточную, а неудачная закрывается там же, где и раньше —
-     * стоп двигается только вверх.
-     */
-    private suspend fun trailStopIfPossible(
-        accountId: String,
-        figi: String,
-        lots: Long,
-        entryPrice: Double,
-        candles: List<Candle>,
-        atr: Double?,
-    ): List<String> {
-        if (!tokenStore.trailingStopEnabled || atr == null || atr <= 0) return emptyList()
-
-        val recentHigh = candles.takeLast(TRAIL_WINDOW_BARS).maxOfOrNull { it.high.toDouble() } ?: return emptyList()
-        val highWater = maxOf(tokenStore.positionHighWaterPrice, recentHigh, entryPrice)
-        tokenStore.positionHighWaterPrice = highWater
-
-        val multiplier = riskManager.activeLimits.atrMultiplier
-        val candidate = highWater - multiplier * atr
-        val currentStop = tokenStore.protectiveStopPrice
-        // Двигаем не на каждую копейку: перевыставление заявки — два запроса
-        // к брокеру, и дёргать их из-за шума бессмысленно.
-        if (candidate <= currentStop + atr * TRAIL_STEP_ATR) return emptyList()
-
-        val orderId = tokenStore.protectiveStopOrderId
-        if (orderId != null) {
-            val cancelled = runCatching { repository.cancelStopOrder(accountId, orderId) }
-            if (cancelled.isFailure) {
-                return listOf(
-                    "Стоп подтянуть не удалось: старую заявку не сняли " +
-                        "(${cancelled.exceptionOrNull()?.message}). Прежний стоп остаётся в силе.",
-                )
-            }
-        }
-
-        return runCatching { repository.placeProtectiveStop(accountId, figi, lots, candidate) }.fold(
-            onSuccess = { id ->
-                tokenStore.protectiveStopOrderId = id
-                tokenStore.protectiveStopPrice = candidate
-                listOf(
-                    "Стоп подтянут с ${fmt(currentStop)} до ${fmt(candidate)}: цена доходила " +
-                        "до ${fmt(highWater)}, стоп держится на ${fmt(multiplier)} x ATR ниже максимума.",
-                )
-            },
-            onFailure = { error ->
-                tokenStore.protectiveStopOrderId = null
-                listOf(
-                    "Стоп подтянуть не удалось: брокер не принял новую заявку (${error.message}). " +
-                        "Позиция осталась без биржевой заявки — сработает только мягкий стоп " +
-                        "${fmt(currentStop)} на очередной проверке.",
-                )
-            },
-        )
     }
 
     /** Снимает защитную заявку перед закрытием позиции, чтобы она не выстрелила потом. */
@@ -401,16 +240,13 @@ class TradingEngine(
         return Math.round(base * decision.conviction).coerceIn(1L, base)
     }
 
-    /** Запас истории под таймфрейм: с тройным запасом на ночь и выходные. */
-    private fun lookbackMinutesFor(interval: String): Long {
-        val minutesPerBar = when (interval) {
-            "CANDLE_INTERVAL_1_MIN" -> 1L
-            "CANDLE_INTERVAL_5_MIN" -> 5L
-            "CANDLE_INTERVAL_15_MIN" -> 15L
-            "CANDLE_INTERVAL_HOUR" -> 60L
-            else -> 15L
-        }
-        return minutesPerBar * BARS_WANTED * 3
+    /**
+     * Сколько календарных дней истории брать. Канал входа — 20 дневных или 120
+     * часовых свечей; запас нужен на выходные, праздники и досмотр пропуска.
+     */
+    private fun historyDaysFor(interval: String): Long = when (interval) {
+        SecureTokenStore.INTERVAL_HOUR -> 45L
+        else -> 120L
     }
 
     private fun buildIndicatorReadings(
@@ -428,15 +264,12 @@ class TradingEngine(
         return listOf(
             IndicatorReading("Режим", mode),
             IndicatorReading("Последняя цена", fmt(snapshot.lastPrice)),
-            IndicatorReading("SMA(${snapshot.fastPeriod})", fmt(snapshot.fastSmaCurrent)),
-            IndicatorReading("SMA(${snapshot.slowPeriod})", fmt(snapshot.slowSmaCurrent)),
-            IndicatorReading("Расхождение SMA", "${fmt(snapshot.spreadPercent)}%"),
+            IndicatorReading("Максимум за ${snapshot.slowPeriod} свечей", fmt(snapshot.slowSmaCurrent)),
+            IndicatorReading("Минимум за ${snapshot.fastPeriod} свечей", fmt(snapshot.fastSmaCurrent)),
             IndicatorReading("Свечей в расчёте", snapshot.candlesAnalyzed.toString()),
         ) + base +
             listOfNotNull(
-                decision.signalCandleTime?.let { IndicatorReading("Пересечение на свече", it) },
-                tokenStore.protectiveStopPrice.takeIf { it > 0 }
-                    ?.let { IndicatorReading("Защитный стоп", fmt(it)) },
+                decision.signalCandleTime?.let { IndicatorReading("Сигнал на свече", it) },
             )
     }
 
@@ -445,6 +278,7 @@ class TradingEngine(
         "CANDLE_INTERVAL_5_MIN" -> "5 минут"
         "CANDLE_INTERVAL_15_MIN" -> "15 минут"
         "CANDLE_INTERVAL_HOUR" -> "1 час"
+        "CANDLE_INTERVAL_DAY" -> "1 день"
         else -> interval.removePrefix("CANDLE_INTERVAL_")
     }
 
@@ -468,9 +302,6 @@ class TradingEngine(
     ).also(journal::append)
 
     private companion object {
-        const val BARS_WANTED = 120
-        const val TRAIL_WINDOW_BARS = 20
-        const val TRAIL_STEP_ATR = 0.5
         const val MAX_SCAN_BARS = 20
         const val DEFAULT_SCAN_BARS = 5
     }

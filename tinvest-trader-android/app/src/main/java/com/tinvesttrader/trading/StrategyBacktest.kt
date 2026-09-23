@@ -81,6 +81,11 @@ data class BotBacktestSettings(
      * риск, который стратегия не контролирует.
      */
     val flatAtSessionEnd: Boolean = false,
+    /**
+     * Стопы вообще. Выключено — позиция закрывается только сигналом стратегии,
+     * как у живого бота после отказа от стоп-заявок.
+     */
+    val stops: Boolean = true,
 )
 
 data class BotBacktestResult(
@@ -302,7 +307,7 @@ object StrategyBacktest {
                     entryConviction = decision.conviction.coerceIn(0.0, 1.0)
                     highWater = fillPrice
                     lowSinceLastPoll = Double.MAX_VALUE
-                    stopPrice = stopPriceFor(entryPrice, window, settings)
+                    stopPrice = if (settings.stops) stopPriceFor(entryPrice, window, settings) else 0.0
                 }
                 bar++
                 continue
