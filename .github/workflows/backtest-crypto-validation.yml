@@ -1,0 +1,51 @@
+name: backtest-crypto-validation
+
+# Три проверки крипто-зацепки: только 2022–2026, без отбора выживших, портфель.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/backtest-crypto-validation.yml'
+      - 'tinvest-trader-android/app/src/test/java/com/tinvesttrader/trading/CryptoValidationReport.kt'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Download daily candles
+        run: |
+          set -uo pipefail
+          OUT=tinvest-trader-android/app/build/crypto-validation
+          mkdir -p "$OUT"
+          # имя в отчёте = символ Yahoo без -USD, кроме оговорённых
+          declare -A SYM=( [IOTA]=IOTA-USD [LUNC]=LUNC-USD )
+          for c in BTC ETH ADA BNB DOGE LINK LTC SOL TRX XRP BCH XEM XLM IOTA DASH NEO EOS XMR QTUM BTG ICX LSK ETC OMG LUNC FTT BSV THETA VET FIL XTZ ALGO ICP; do
+            sym="${SYM[$c]:-$c-USD}"
+            raw=/tmp/y.json
+            code=$(curl -sS --max-time 60 -o "$raw" -w '%{http_code}' -A "Mozilla/5.0 (X11; Linux x86_64)" \
+              "https://query1.finance.yahoo.com/v8/finance/chart/$sym?range=10y&interval=1d") || { echo "$c: запрос не прошёл"; continue; }
+            if [ "$code" != "200" ]; then echo "$c ($sym): HTTP $code"; continue; fi
+            f="$OUT/$c.csv"
+            echo "open,high,low,close,volume,begin" > "$f"
+            jq -r '.chart.result[0] as $r | ($r.indicators.quote[0]) as $q
+              | range(0; ($r.timestamp | length))
+              | select($q.close[.] != null and $q.open[.] != null and $q.high[.] != null and $q.low[.] != null)
+              | [ $q.open[.], $q.high[.], $q.low[.], $q.close[.], ($q.volume[.] // 0), ($r.timestamp[.] | todate) ] | @csv' "$raw" | tr -d '"' >> "$f"
+            n=$(( $(wc -l < "$f") - 1 ))
+            if [ "$n" -lt 200 ]; then echo "$c ($sym): только $n свечей — пропуск"; rm -f "$f"; else echo "$c ($sym): $n свечей, с $(sed -n 2p "$f" | cut -d, -f6 | cut -c1-10)"; fi
+            sleep 1
+          done
+      - name: Run validation report
+        working-directory: tinvest-trader-android
+        run: |
+          export CRYPTO_VALIDATION_DIR="$PWD/app/build/crypto-validation"
+          set -o pipefail
+          gradle :app:testDebugUnitTest --tests 'com.tinvesttrader.trading.CryptoValidationReport' --no-daemon 2>&1 | tee /tmp/gradle.log || {
+            grep -E "^e: " /tmp/gradle.log || true; exit 1; }
