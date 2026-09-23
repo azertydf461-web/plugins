@@ -127,8 +127,10 @@ class CryptoValidationReport {
      */
     private fun simulate(s: Series, start: String): Sim? {
         val c = s.candles
-        val first = s.days.indexOfFirst { it >= start }.coerceAtLeast(entry + 1)
-        if (first < 0 || first >= c.size - 30) return null
+        val startIndex = s.days.indexOfFirst { it >= start }
+        if (startIndex < 0) return null
+        val first = startIndex.coerceAtLeast(entry + 1)
+        if (first >= c.size - 30) return null
         val hi = c.map { it.high.toDouble() }
         val lo = c.map { it.low.toDouble() }
         val cl = c.map { it.close.toDouble() }
