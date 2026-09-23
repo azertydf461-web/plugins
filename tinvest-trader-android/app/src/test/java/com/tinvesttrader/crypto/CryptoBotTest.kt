@@ -94,8 +94,8 @@ class CryptoBotTest {
     fun walletBalanceSubtractsLockedAmount() = runBlocking {
         val client = BybitClient("KEY", "SECRET", live = false, http = fakeHttp(mutableListOf()), baseUrlOverride = "https://test.local")
         val balances = client.availableBalances(listOf("BTC", "USDT"))
-        assertEquals(BigDecimal("0.5"), balances["BTC"]!!.stripTrailingZeros())
-        assertEquals(BigDecimal("80"), balances["USDT"]!!.stripTrailingZeros())
+        assertEquals(0, BigDecimal("0.5").compareTo(balances["BTC"]))
+        assertEquals(0, BigDecimal("80").compareTo(balances["USDT"]))
     }
 
     private fun fakeHttp(seen: MutableList<Request>) = OkHttpClient.Builder()

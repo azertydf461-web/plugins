@@ -90,7 +90,6 @@ class TradingEngine(
 
         val position = portfolio.positions.firstOrNull { it.figi == figi }
         val currentLots = position?.quantity?.toDouble()?.toLong() ?: 0L
-        val lastPrice = decision.indicators.lastPrice
 
         // Стопы у брокера больше не ставятся: роль стопа играет нижняя граница
         // канала. Заявка, оставшаяся от прошлых версий бота, снимается, чтобы
